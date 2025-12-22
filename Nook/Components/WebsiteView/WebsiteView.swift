@@ -13,44 +13,190 @@ import AppKit
 struct LinkStatusBar: View {
     let hoveredLink: String?
     let isCommandPressed: Bool
+    let accentColor: Color
+    @Environment(\.colorScheme) var colorScheme
+    @State private var shouldShow: Bool = false
+    @State private var hoverTask: Task<Void, Never>?
+    @State private var displayedLink: String? = nil
     
     var body: some View {
-        if let link = hoveredLink, !link.isEmpty {
-            Text(isCommandPressed ? "Open \(link) in a new tab and focus it" : link)
+        // Show the view if we have a link to display (current or last shown)
+        if let link = displayedLink, !link.isEmpty {
+            Text(displayText(for: link))
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.secondary)
+                .foregroundColor(textColor)
                 .lineLimit(1)
-                .truncationMode(.middle)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            Color(hex: "3E4D2E"),
-                            Color(hex: "2E2E2E")
-                        ]),
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(.ultraThickMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 999))
                 .overlay(
                     RoundedRectangle(cornerRadius: 999)
-                        .stroke(.white.opacity(0.2), lineWidth: 1)
+                        .stroke(borderColor, lineWidth: 1)
                 )
-                .opacity(hoveredLink != nil && !hoveredLink!.isEmpty ? 1 : 0)
-                .animation(.easeInOut(duration: 0.2), value: hoveredLink)
+                .opacity(shouldShow ? 1 : 0)
+                .animation(.easeOut(duration: 0.25), value: shouldShow)
+                .onChange(of: hoveredLink) {_,  newLink in
+                    handleHoverChange(newLink: newLink)
+                }
+                .onAppear {
+                    handleHoverChange(newLink: hoveredLink)
+                }
+                .onDisappear {
+                    hoverTask?.cancel()
+                    hoverTask = nil
+                    shouldShow = false
+                    displayedLink = nil
+                }
+        } else {
+            Color.clear
+                .onChange(of: hoveredLink) {_,  newLink in
+                    handleHoverChange(newLink: newLink)
+                }
+        }
+    }
+    
+    private func displayText(for link: String) -> String {
+        let truncatedLink = truncateLink(link)
+        if isCommandPressed {
+            return "Open \(truncatedLink) in a new tab and focus it"
+        } else {
+            return truncatedLink
+        }
+    }
+    
+    private func handleHoverChange(newLink: String?) {
+        // Cancel any existing task
+        hoverTask?.cancel()
+        hoverTask = nil
+        
+        if let link = newLink, !link.isEmpty {
+            // New link - update displayed link immediately
+            displayedLink = link
+            
+            // Wait then show if not already showing
+            if !shouldShow {
+                hoverTask = Task {
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+                    if !Task.isCancelled {
+                        await MainActor.run { shouldShow = true }
+                    }
+                }
+            }
+        } else {
+            // Link cleared - wait then hide
+            hoverTask = Task {
+                try? await Task.sleep(nanoseconds: 250_000_000) // 0.25s delay
+                if !Task.isCancelled {
+                    await MainActor.run {
+                        shouldShow = false
+                    }
+                    // Clear displayed link after fade out animation completes
+                    try? await Task.sleep(nanoseconds: 250_000_000) // 0.25s for fade out
+                    if !Task.isCancelled {
+                        await MainActor.run {
+                            displayedLink = nil
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func truncateLink(_ link: String) -> String {
+        if link.count > 60 {
+            let firstPart = String(link.prefix(30))
+            let lastPart = String(link.suffix(30))
+            return "\(firstPart)...\(lastPart)"
+        }
+        return link
+    }
+    
+    private var backgroundColor: some View {
+        Group {
+            if colorScheme == .dark {
+                // Dark mode: gradient background using accent color
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        accentColor,
+                        lighterAccentColor
+                    ]),
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            } else {
+                // Light mode: white background
+                Color.white
+            }
+        }
+    }
+    
+    private var lighterAccentColor: Color {
+        #if os(macOS)
+        // Blend the accent color with white for lighter variant
+        let nsColor = NSColor(accentColor)
+        if let blended = nsColor.blended(withFraction: 0.35, of: .white) {
+            return Color(nsColor: blended)
+        } else {
+            return accentColor
+        }
+        #else
+        return accentColor
+        #endif
+    }
+    
+    private var textColor: Color {
+        if colorScheme == .dark {
+            return Color.white
+        } else {
+            // Light mode: colored text using accent color
+            return accentColor
+        }
+    }
+    
+    private var borderColor: Color {
+        if colorScheme == .dark {
+            return .white.opacity(0.2)
+        } else {
+            return accentColor.opacity(0.3)
         }
     }
 }
 
 struct WebsiteView: View {
     @EnvironmentObject var browserManager: BrowserManager
-    @EnvironmentObject var windowState: BrowserWindowState
+    @Environment(BrowserWindowState.self) private var windowState
     @EnvironmentObject var splitManager: SplitViewManager
+    @Environment(\.nookSettings) var nookSettings
     @State private var hoveredLink: String?
     @State private var isCommandPressed: Bool = false
     @State private var isDropTargeted: Bool = false
+    
+    private let dragCoordinateSpace = "splitPreview"
+
+    private var cornerRadius: CGFloat {
+        if #available(macOS 26.0, *) {
+            return 8
+        } else {
+            return 8
+        }
+    }
+    
+    private var webViewClipShape: AnyShape {
+        let hasTopBar = nookSettings.topBarAddressView
+        
+        if hasTopBar {
+            return AnyShape(UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: cornerRadius,
+                bottomTrailingRadius: cornerRadius,
+                topTrailingRadius: 0,
+                style: .continuous
+            ))
+        } else {
+            return AnyShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        }
+    }
 
     var body: some View {
         ZStack() {
@@ -67,36 +213,18 @@ struct WebsiteView: View {
                             rightId: splitManager.rightTabId(for: windowState.id),
                             windowState: windowState
                         )
+                        .coordinateSpace(name: dragCoordinateSpace)
                         .background(shouldShowSplit ? Color.clear : Color(nsColor: .windowBackgroundColor))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipShape(RoundedRectangle(cornerRadius: {
-                            if windowState.isFullScreen {
-                                return 0
-                            }
-                            if #available(macOS 26.0, *) {
-                                return 12
-                            } else {
-                                return 6
-                            }
-                        }(), style: .continuous))
+                        .clipShape(webViewClipShape)
                         .shadow(color: Color.black.opacity(0.3), radius: 4, x: 0, y: 0)
-                        // Divider + pane close overlay
-                        .overlay(alignment: .top) {
-                            if shouldShowSplit {
-                                SplitControlsOverlay()
-                                    .environmentObject(browserManager)
-                                    .environmentObject(splitManager)
-                                    .environmentObject(windowState)
-                            }
-                        }
+                        // Critical: Use allowsHitTesting to prevent SwiftUI from intercepting mouse events
+                        // This allows right-clicks to pass through to the underlying NSView (WKWebView)
+                        .allowsHitTesting(true)
+                        .contentShape(Rectangle())
                     }
-                    .contextMenu {
-                        // Divider + close buttons overlay when split is active
-                        if splitManager.isSplit(for: windowState.id) {
-                            Button("Exit Split View") { splitManager.exitSplit(keep: .left, for: windowState.id) }
-                            Button("Swap Sides") { splitManager.swapSides(for: windowState.id) }
-                        }
-                    }
+                    // Removed SwiftUI contextMenu - it intercepts ALL right-clicks
+                    // WKWebView's willOpenMenu will handle context menus for images
                 } else {
                     EmptyWebsiteView()
                 }
@@ -118,17 +246,193 @@ struct WebsiteView: View {
                     }
                 }
                 Spacer()
-//                HStack {
-//                    LinkStatusBar(hoveredLink: hoveredLink, isCommandPressed: isCommandPressed)
-//                        .padding(10)
-//                    Spacer()
-//                }
+                if nookSettings.showLinkStatusBar {
+                    HStack {
+                        LinkStatusBar(
+                            hoveredLink: hoveredLink,
+                            isCommandPressed: isCommandPressed,
+                            accentColor: browserManager.gradientColorManager.primaryColor
+                        )
+                        .padding(10)
+                        Spacer()
+                    }
+                }
                 
+            }
+            
+            // Split preview overlay - shows cards during drag operations
+            if splitManager.getSplitState(for: windowState.id).isPreviewActive {
+                SplitPreviewOverlay()
+                    .environmentObject(splitManager)
+                    .environmentObject(browserManager)
+                    .environment(windowState)
+                    .coordinateSpace(name: dragCoordinateSpace)
+                    .animation(
+                        .spring(response: 0.3, dampingFraction: 0.6, blendDuration: 0.2),
+                        value: splitManager.getSplitState(for: windowState.id).isPreviewActive
+                    )
             }
             
         }
     }
 
+}
+
+// MARK: - Split Preview Overlay
+private struct SplitPreviewOverlay: View {
+    @EnvironmentObject var splitManager: SplitViewManager
+    @EnvironmentObject var browserManager: BrowserManager
+    @Environment(BrowserWindowState.self) private var windowState
+    
+    var body: some View {
+        GeometryReader { geometry in
+            let splitState = splitManager.getSplitState(for: windowState.id)
+            let previewSide = splitState.previewSide
+            let dragLocation = splitState.dragLocation
+            let cardPadding: CGFloat = 20
+            let cardWidth: CGFloat = 315
+            let cardHeight: CGFloat = 522
+            
+            HStack(spacing: 0) {
+                // Left card - vertically centered with magnetic effect
+                VStack {
+                    Spacer()
+                    MagneticCardView(
+                        side: .left,
+                        icon: "rectangle.lefthalf.filled",
+                        text: "Add left split",
+                        isTabHovered: previewSide == .left,
+                        dragLocation: dragLocation,
+                        cardFrame: CGRect(
+                            x: cardPadding,
+                            y: (geometry.size.height - cardHeight) / 2,
+                            width: cardWidth,
+                            height: cardHeight
+                        ),
+                        geometry: geometry,
+                        accentColor: browserManager.gradientColorManager.displayGradient.primaryColor
+                    )
+                    Spacer()
+                }
+                .padding(.leading, cardPadding)
+                
+                Spacer()
+                
+                // Right card - vertically centered with magnetic effect
+                VStack {
+                    Spacer()
+                    MagneticCardView(
+                        side: .right,
+                        icon: "rectangle.righthalf.filled",
+                        text: "Add right split",
+                        isTabHovered: previewSide == .right,
+                        dragLocation: dragLocation,
+                        cardFrame: CGRect(
+                            x: geometry.size.width - cardPadding - cardWidth,
+                            y: (geometry.size.height - cardHeight) / 2,
+                            width: cardWidth,
+                            height: cardHeight
+                        ),
+                        geometry: geometry,
+                        accentColor: browserManager.gradientColorManager.displayGradient.primaryColor
+                    )
+                    Spacer()
+                }
+                .padding(.trailing, cardPadding)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false) // Don't intercept mouse events - let drag handling work
+        }
+    }
+}
+
+// MARK: - Magnetic Card View
+private struct MagneticCardView: View {
+    let side: SplitViewManager.Side
+    let icon: String
+    let text: String
+    let isTabHovered: Bool
+    let dragLocation: CGPoint?
+    let cardFrame: CGRect
+    let geometry: GeometryProxy
+    let accentColor: Color
+    
+    @EnvironmentObject var splitManager: SplitViewManager
+    @Environment(BrowserWindowState.self) private var windowState
+    
+    @State private var offset: CGSize = .zero
+    @State private var isMagneticallyActive: Bool = false
+    
+    // Computed property: card is hovered if previewSide matches OR if magnetically active
+    private var cardIsHovered: Bool {
+        let splitState = splitManager.getSplitState(for: windowState.id)
+        return splitState.previewSide == side || isMagneticallyActive
+    }
+    
+    var body: some View {
+        SplitCardView(
+            icon: icon,
+            text: text,
+            isTabHovered: cardIsHovered,
+            accentColor: accentColor
+        )
+        .offset(offset)
+        .scaleEffect(1.0) // Cards appear at full size
+        .animation(
+            dragLocation != nil ? .interactiveSpring(response: 0.3, dampingFraction: 0.7) : .spring(response: 0.4, dampingFraction: 0.6),
+            value: offset
+        )
+        .transition(.asymmetric(
+            insertion: .scale(scale: 0.7, anchor: .center),
+            removal: .scale(scale: 0.5, anchor: .center).combined(with: .opacity)
+        ))
+        .onChange(of: dragLocation) { _, location in
+            guard let location = location else {
+                if isMagneticallyActive {
+                    isMagneticallyActive = false
+                    offset = .zero
+                    // Clear preview side when drag ends
+                    splitManager.updatePreviewSide(nil, for: windowState.id)
+                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                }
+                return
+            }
+            
+            // dragLocation is in NSView coordinates (relative to container view, bottom-left origin)
+            // cardFrame is in GeometryReader coordinates (top-left origin)
+            // Convert NSView Y coordinate to SwiftUI coordinate space
+            let geometryHeight = geometry.size.height
+            let convertedLocation = CGPoint(x: location.x, y: geometryHeight - location.y)
+            
+            let cardCenter = CGPoint(x: cardFrame.midX, y: cardFrame.midY)
+            
+            // Check if drag is within card bounds (with some margin for magnetic effect)
+            let margin: CGFloat = 50
+            let expandedFrame = cardFrame.insetBy(dx: -margin, dy: -margin)
+            
+            if expandedFrame.contains(convertedLocation) {
+                // Calculate magnetic offset (45% of distance to center)
+                let dx = (convertedLocation.x - cardCenter.x) * 0.45
+                let dy = (convertedLocation.y - cardCenter.y) * 0.45
+                offset = CGSize(width: dx, height: dy)
+                
+                if !isMagneticallyActive {
+                    isMagneticallyActive = true
+                    // Update preview side to indicate this card is hovered
+                    splitManager.updatePreviewSide(side, for: windowState.id)
+                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                }
+            } else {
+                if isMagneticallyActive {
+                    isMagneticallyActive = false
+                    offset = .zero
+                    // Clear preview side when leaving card
+                    splitManager.updatePreviewSide(nil, for: windowState.id)
+                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Tab Compositor Wrapper
@@ -167,13 +471,13 @@ struct TabCompositorWrapper: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(browserManager: browserManager, windowState: windowState) }
 
     func makeNSView(context: Context) -> NSView {
-        let containerView = NSView()
+        let containerView = ContainerView()
         containerView.wantsLayer = true
         containerView.layer?.backgroundColor = NSColor.clear.cgColor
         containerView.postsFrameChangedNotifications = true
 
-        // Store reference to container view in browser manager
-        browserManager.setCompositorContainerView(containerView, for: windowState.id)
+        // Store reference to container view in WebViewCoordinator
+        browserManager.webViewCoordinator?.setCompositorContainerView(containerView, for: windowState.id)
         
         // Install AppKit drag-capture overlay above all webviews
         let overlay = SplitDropCaptureView(frame: containerView.bounds)
@@ -237,7 +541,7 @@ struct TabCompositorWrapper: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-        coordinator.browserManager?.removeCompositorContainerView(for: coordinator.windowState.id)
+        coordinator.browserManager?.webViewCoordinator?.removeCompositorContainerView(for: coordinator.windowState.id)
     }
 
     private func updateCompositor(_ containerView: NSView) {
@@ -251,14 +555,29 @@ struct TabCompositorWrapper: NSViewRepresentable {
         let allTabs = browserManager.tabsForDisplay(in: windowState)
         
         let split = browserManager.splitManager
-        let currentId = browserManager.currentTab(for: windowState)?.id
-        let leftId = split.leftTabId(for: windowState.id)
-        let rightId = split.rightTabId(for: windowState.id)
-        let isCurrentPane = (currentId != nil) && (currentId == leftId || currentId == rightId)
-        if split.isSplit(for: windowState.id) && isCurrentPane {
-            // Auto-heal if one side is missing (tab closed etc.), but not during preview
-            let splitState = split.getSplitState(for: windowState.id)
-            if !splitState.isPreviewActive {
+        let splitState = split.getSplitState(for: windowState.id)
+        
+        // Skip rendering split panes during preview - show only the current tab at full size
+        if splitState.isPreviewActive {
+            // During preview, show only the current tab at full size
+            let currentId = browserManager.currentTab(for: windowState)?.id
+            for tab in allTabs {
+                if !tab.isUnloaded {
+                    let webView = webView(for: tab, windowId: windowState.id)
+                    webView.frame = containerView.bounds
+                    webView.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
+                    containerView.addSubview(webView)
+                    webView.isHidden = tab.id != currentId
+                }
+            }
+        } else {
+            // Normal split view rendering (when not in preview)
+            let currentId = browserManager.currentTab(for: windowState)?.id
+            let leftId = split.leftTabId(for: windowState.id)
+            let rightId = split.rightTabId(for: windowState.id)
+            let isCurrentPane = (currentId != nil) && (currentId == leftId || currentId == rightId)
+            if split.isSplit(for: windowState.id) && isCurrentPane {
+                // Auto-heal if one side is missing (tab closed etc.)
                 let leftResolved = split.resolveTab(leftId)
                 let rightResolved = split.resolveTab(rightId)
                 if leftResolved == nil && rightResolved == nil {
@@ -268,67 +587,67 @@ struct TabCompositorWrapper: NSViewRepresentable {
                 } else if rightResolved == nil, let _ = leftResolved {
                     browserManager.splitManager.exitSplit(keep: .left, for: windowState.id)
                 }
-            }
 
-            // Compute pane rects with a visible gap
-            let gap: CGFloat = 8
-            let fraction = max(split.minFraction, min(split.maxFraction, split.dividerFraction(for: windowState.id)))
-            let total = containerView.bounds
-            let leftWidthRaw = floor(total.width * fraction)
-            let rightWidthRaw = max(0, total.width - leftWidthRaw)
-            let leftRect = NSRect(x: total.minX,
-                                  y: total.minY,
-                                  width: max(1, leftWidthRaw - gap/2),
-                                  height: total.height)
-            let rightRect = NSRect(x: total.minX + leftWidthRaw + gap/2,
-                                   y: total.minY,
-                                   width: max(1, rightWidthRaw - gap/2),
-                                   height: total.height)
+                // Compute pane rects with a visible gap
+                let gap: CGFloat = 8
+                let fraction = max(split.minFraction, min(split.maxFraction, split.dividerFraction(for: windowState.id)))
+                let total = containerView.bounds
+                let leftWidthRaw = floor(total.width * fraction)
+                let rightWidthRaw = max(0, total.width - leftWidthRaw)
+                let leftRect = NSRect(x: total.minX,
+                                      y: total.minY,
+                                      width: max(1, leftWidthRaw - gap/2),
+                                      height: total.height)
+                let rightRect = NSRect(x: total.minX + leftWidthRaw + gap/2,
+                                       y: total.minY,
+                                       width: max(1, rightWidthRaw - gap/2),
+                                       height: total.height)
 
-            let leftId = split.leftTabId(for: windowState.id)
-            let rightId = split.rightTabId(for: windowState.id)
+                let leftId = split.leftTabId(for: windowState.id)
+                let rightId = split.rightTabId(for: windowState.id)
 
-            // Add pane containers with rounded corners and background
-            let activeId = browserManager.currentTab(for: windowState)?.id
-            let accent = browserManager.gradientColorManager.displayGradient.primaryNSColor
-            // Resolve pane tabs across ALL tabs (not just current space)
-            let allKnownTabs = browserManager.tabManager.allTabs()
+                // Add pane containers with rounded corners and background
+                let activeSide = split.activeSide(for: windowState.id)
+                let accent = browserManager.gradientColorManager.displayGradient.primaryNSColor
+                // Resolve pane tabs across ALL tabs (not just current space)
+                let allKnownTabs = browserManager.tabManager.allTabs()
 
-            if let lId = leftId, let leftTab = allKnownTabs.first(where: { $0.id == lId }) {
-                // Force-create/ensure loaded when visible in split
-                let lWeb = webView(for: leftTab, windowId: windowState.id)
-                let pane = makePaneContainer(frame: leftRect, isActive: (activeId == lId), accent: accent)
-                containerView.addSubview(pane)
-                lWeb.frame = pane.bounds
-                lWeb.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
-                lWeb.isHidden = false
-                pane.addSubview(lWeb)
-                
-            }
+                if let lId = leftId, let leftTab = allKnownTabs.first(where: { $0.id == lId }) {
+                    // Force-create/ensure loaded when visible in split
+                    let lWeb = webView(for: leftTab, windowId: windowState.id)
+                    let pane = makePaneContainer(frame: leftRect, isActive: (activeSide == .left), accent: accent, side: .left)
+                    containerView.addSubview(pane)
+                    lWeb.frame = pane.bounds
+                    lWeb.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
+                    lWeb.isHidden = false
+                    pane.addSubview(lWeb)
+                    
+                }
 
-            if let rId = rightId, let rightTab = allKnownTabs.first(where: { $0.id == rId }) {
-                // Force-create/ensure loaded when visible in split
-                let rWeb = webView(for: rightTab, windowId: windowState.id)
-                let pane = makePaneContainer(frame: rightRect, isActive: (activeId == rId), accent: accent)
-                containerView.addSubview(pane)
-                rWeb.frame = pane.bounds
-                rWeb.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
-                rWeb.isHidden = false
-                pane.addSubview(rWeb)
-                
-            }
-        } else {
-            for tab in allTabs {
-                // Only add tabs that are still in the tab manager (not closed)
-                if !tab.isUnloaded {
-                    let webView = webView(for: tab, windowId: windowState.id)
-                    webView.frame = containerView.bounds
-                    webView.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
-                    containerView.addSubview(webView)
-                    webView.isHidden = tab.id != browserManager.currentTab(for: windowState)?.id
+                if let rId = rightId, let rightTab = allKnownTabs.first(where: { $0.id == rId }) {
+                    // Force-create/ensure loaded when visible in split
+                    let rWeb = webView(for: rightTab, windowId: windowState.id)
+                    let pane = makePaneContainer(frame: rightRect, isActive: (activeSide == .right), accent: accent, side: .right)
+                    containerView.addSubview(pane)
+                    rWeb.frame = pane.bounds
+                    rWeb.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
+                    rWeb.isHidden = false
+                    pane.addSubview(rWeb)
+                    
+                }
+            } else {
+                // Not in split view - show only current tab
+                for tab in allTabs {
+                    // Only add tabs that are still in the tab manager (not closed)
+                    if !tab.isUnloaded {
+                        let webView = webView(for: tab, windowId: windowState.id)
+                        webView.frame = containerView.bounds
+                        webView.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
+                        containerView.addSubview(webView)
+                        webView.isHidden = tab.id != browserManager.currentTab(for: windowState)?.id
+                    }
                 }
             }
-            
         }
 
   
@@ -352,24 +671,87 @@ struct TabCompositorWrapper: NSViewRepresentable {
         }
     }
 
-    private func makePaneContainer(frame: NSRect, isActive: Bool, accent: NSColor) -> NSView {
+    private func makePaneContainer(frame: NSRect, isActive: Bool, accent: NSColor, side: SplitViewManager.Side) -> NSView {
+        let cornerRadius: CGFloat = {
+            if #available(macOS 26.0, *) { return 8 } else { return 8 }
+        }()
+        
         let v = NSView(frame: frame)
         v.wantsLayer = true
+        
         if let layer = v.layer {
-            layer.cornerRadius = {
-                if #available(macOS 26.0, *) { return 12 } else { return 6 }
-            }()
-            layer.masksToBounds = true
             layer.backgroundColor = NSColor.windowBackgroundColor.cgColor
-            // Slim border around the active pane using the space accent color
-            layer.borderWidth = isActive ? 1.0 : 0.0
-            layer.borderColor = isActive ? accent.withAlphaComponent(0.9).cgColor : NSColor.clear.cgColor
+            
+            // Create mask layer for uneven rounded corners
+            let maskLayer = CAShapeLayer()
+            let maskPath = createUnevenRoundedRectPath(
+                rect: v.bounds,
+                topLeadingRadius: side == .left ? 0 : cornerRadius,
+                bottomLeadingRadius: cornerRadius,
+                bottomTrailingRadius: cornerRadius,
+                topTrailingRadius: side == .right ? 0 : cornerRadius
+            )
+            maskLayer.path = maskPath
+            layer.mask = maskLayer
+            
+            // Add border layer
+            if isActive {
+                let borderLayer = CAShapeLayer()
+                borderLayer.path = maskPath
+                borderLayer.strokeColor = accent.withAlphaComponent(0.9).cgColor
+                borderLayer.fillColor = NSColor.clear.cgColor
+                borderLayer.lineWidth = 1.0
+                layer.addSublayer(borderLayer)
+            }
         }
-        // Allow the pane container to grow/shrink with its superview's size changes.
-        // Width is always recomputed on frame changes via our observer above, but this
-        // keeps the panes visually in sync during live resize.
-        v.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
+        
+        v.autoresizingMask = [.width, .height]
         return v
+    }
+
+    private func createUnevenRoundedRectPath(
+        rect: CGRect,
+        topLeadingRadius: CGFloat,
+        bottomLeadingRadius: CGFloat,
+        bottomTrailingRadius: CGFloat,
+        topTrailingRadius: CGFloat
+    ) -> CGPath {
+        let path = CGMutablePath()
+        
+        let minX = rect.minX
+        let minY = rect.minY
+        let maxX = rect.maxX
+        let maxY = rect.maxY
+        
+        // Start from top-left, move clockwise
+        path.move(to: CGPoint(x: minX + topLeadingRadius, y: maxY))
+        
+        // Top edge to top-right corner
+        path.addLine(to: CGPoint(x: maxX - topTrailingRadius, y: maxY))
+        if topTrailingRadius > 0 {
+            path.addArc(tangent1End: CGPoint(x: maxX, y: maxY), tangent2End: CGPoint(x: maxX, y: maxY - topTrailingRadius), radius: topTrailingRadius)
+        }
+        
+        // Right edge to bottom-right corner
+        path.addLine(to: CGPoint(x: maxX, y: minY + bottomTrailingRadius))
+        if bottomTrailingRadius > 0 {
+            path.addArc(tangent1End: CGPoint(x: maxX, y: minY), tangent2End: CGPoint(x: maxX - bottomTrailingRadius, y: minY), radius: bottomTrailingRadius)
+        }
+        
+        // Bottom edge to bottom-left corner
+        path.addLine(to: CGPoint(x: minX + bottomLeadingRadius, y: minY))
+        if bottomLeadingRadius > 0 {
+            path.addArc(tangent1End: CGPoint(x: minX, y: minY), tangent2End: CGPoint(x: minX, y: minY + bottomLeadingRadius), radius: bottomLeadingRadius)
+        }
+        
+        // Left edge to top-left corner
+        path.addLine(to: CGPoint(x: minX, y: maxY - topLeadingRadius))
+        if topLeadingRadius > 0 {
+            path.addArc(tangent1End: CGPoint(x: minX, y: maxY), tangent2End: CGPoint(x: minX + topLeadingRadius, y: maxY), radius: topLeadingRadius)
+        }
+        
+        path.closeSubpath()
+        return path
     }
 
     private func setupHoverCallbacks(for tab: Tab) {
@@ -411,11 +793,68 @@ private extension WebsiteView {
     }
 }
 
+// MARK: - Container View that forwards right-clicks to webviews
+
+private class ContainerView: NSView {
+    // Don't intercept events - let them pass through to webviews
+    override var acceptsFirstResponder: Bool { false }
+    
+    // Forward right-clicks to the webview below so context menus work
+    override func rightMouseDown(with event: NSEvent) {
+        print("🔽 [ContainerView] rightMouseDown received, forwarding to webview")
+        // Find the webview at this point and forward the event
+        let point = convert(event.locationInWindow, from: nil)
+        // Use hitTest to find the actual view at this point (will skip overlay if hitTest returns nil)
+        if let hitView = hitTest(point) {
+            if let webView = hitView as? WKWebView {
+                print("🔽 [ContainerView] Found webview via hitTest, forwarding rightMouseDown")
+                webView.rightMouseDown(with: event)
+                return
+            }
+            // Check if hitView contains a webview
+            if let webView = findWebView(in: hitView, at: point) {
+                print("🔽 [ContainerView] Found nested webview, forwarding rightMouseDown")
+                webView.rightMouseDown(with: event)
+                return
+            }
+        }
+        // Fallback: search all subviews
+        for subview in subviews.reversed() {
+            if let webView = findWebView(in: subview, at: point) {
+                print("🔽 [ContainerView] Found webview in subviews, forwarding rightMouseDown")
+                webView.rightMouseDown(with: event)
+                return
+            }
+        }
+        print("🔽 [ContainerView] No webview found, calling super")
+        super.rightMouseDown(with: event)
+    }
+    
+    private func findWebView(in view: NSView, at point: NSPoint) -> WKWebView? {
+        let pointInView = view.convert(point, from: self)
+        if view.bounds.contains(pointInView) {
+            if let webView = view as? WKWebView {
+                return webView
+            }
+            for subview in view.subviews {
+                if let webView = findWebView(in: subview, at: point) {
+                    return webView
+                }
+            }
+        }
+        return nil
+    }
+}
+
+// Split view context menu is handled via buttons in SplitControlsOverlay
+// We don't use SwiftUI's contextMenu modifier because it intercepts all right-clicks
+// and prevents WKWebView's willOpenMenu from being called
+
 // MARK: - Split Controls Overlay
 private struct SplitControlsOverlay: View {
     @EnvironmentObject var browserManager: BrowserManager
     @EnvironmentObject var splitManager: SplitViewManager
-    @EnvironmentObject var windowState: BrowserWindowState
+    @Environment(BrowserWindowState.self) private var windowState
 
     @State private var dragOffset: CGFloat = 0
 
@@ -496,40 +935,5 @@ private struct SplitControlsOverlay: View {
             // Fallback: just exit split
             splitManager.exitSplit(keep: side == .left ? .right : .left, for: windowState.id)
         }
-    }
-}
-
-// (Removed SwiftUI SplitDropOverlay; AppKit SplitDropCaptureView handles all drag capture.)
-
-// MARK: - Tab WebView Wrapper with Hover Detection (Legacy)
-struct TabWebViewWrapper: NSViewRepresentable {
-    let tab: Tab
-    @Binding var hoveredLink: String?
-    @Binding var isCommandPressed: Bool
-
-    func makeNSView(context: Context) -> WKWebView {
-        // Set up link hover callback
-        tab.onLinkHover = { [self] href in
-            DispatchQueue.main.async {
-                self.hoveredLink = href
-                if let href = href {
-                    print("Hovering over link: \(href)")
-                }
-            }
-        }
-        
-        // Set up command hover callback
-        tab.onCommandHover = { [self] href in
-            DispatchQueue.main.async {
-                self.isCommandPressed = href != nil
-            }
-        }
-        
-        print("Showing WebView for tab: \(tab.name)")
-        return tab.activeWebView
-    }
-
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        // The webView is managed by the Tab
     }
 }

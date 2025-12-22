@@ -415,6 +415,7 @@ class TabManager: ObservableObject {
         }
     }
     weak var browserManager: BrowserManager?
+    weak var nookSettings: NookSettingsService?
     private let context: ModelContext
     private let persistence: PersistenceActor
 
@@ -432,7 +433,7 @@ class TabManager: ObservableObject {
     @Published public private(set) var currentSpace: Space?
 
     // Normal tabs per space
-    @Published private var tabsBySpace: [UUID: [Tab]] = [:]
+    @Published var tabsBySpace: [UUID: [Tab]] = [:]
 
     // Space-level pinned tabs per space
     @Published private var spacePinnedTabs: [UUID: [Tab]] = [:]
@@ -530,6 +531,7 @@ class TabManager: ObservableObject {
 
     private func attach(_ tab: Tab) {
         tab.browserManager = browserManager
+        tab.nookSettings = nookSettings
     }
 
     private func allTabsAllSpaces() -> [Tab] {
@@ -945,6 +947,9 @@ class TabManager: ObservableObject {
     }
 
     func removeTab(_ id: UUID) {
+        // Notify SplitViewManager about tab closure to prevent zombie state
+        browserManager?.splitManager.handleTabClosure(id)
+        
         let wasCurrent = (currentTab?.id == id)
         var removed: Tab?
         var removedSpaceId: UUID?
@@ -992,7 +997,7 @@ class TabManager: ObservableObject {
 
         // Force unload the tab from compositor before removing
         browserManager?.compositorManager.unloadTab(tab)
-        browserManager?.removeAllWebViews(for: tab)
+        browserManager?.webViewCoordinator?.removeAllWebViews(for: tab)
 
         if #available(macOS 15.5, *) {
             ExtensionManager.shared.notifyTabClosed(tab)
@@ -1074,6 +1079,23 @@ class TabManager: ObservableObject {
         print("✅ currentTab set successfully to: \(currentTab?.name ?? "nil")")
         // Do not auto-exit split when leaving split panes; preserve split state
 
+        // Update active side in split view for all windows that contain this tab
+        // Also update windowState.currentTabId for windows that have this tab in split view
+        if let bm = browserManager {
+            for (windowId, windowState) in bm.windowRegistry?.windows ?? [:] {
+                // Check if this tab is in split view for this window
+                if bm.splitManager.isSplit(for: windowId) {
+                    let state = bm.splitManager.getSplitState(for: windowId)
+                    // If tab is on left or right side, update active side and window's current tab
+                    if state.leftTabId == tab.id || state.rightTabId == tab.id {
+                        bm.splitManager.updateActiveSide(for: tab.id, in: windowId)
+                        // Update window's current tab ID so other UI components work correctly
+                        windowState.currentTabId = tab.id
+                    }
+                }
+            }
+        }
+
         // Save this tab as the active tab for the appropriate space
         print("💾 Saving tab as active for space...")
         if let sid = tab.spaceId, let space = spaces.first(where: { $0.id == sid }) {
@@ -1122,7 +1144,7 @@ class TabManager: ObservableObject {
         url: String = "https://www.google.com",
         in space: Space? = nil
     ) -> Tab {
-        let engine = browserManager?.settingsManager.searchEngine ?? .google
+        let engine = nookSettings?.searchEngine ?? .google
         let normalizedUrl = normalizeURL(url, provider: engine)
         guard let validURL = URL(string: normalizedUrl)
         else {
@@ -1160,6 +1182,58 @@ class TabManager: ObservableObject {
             spaceId: sid,
             index: 0, // New tabs get index 0 to appear at top
             browserManager: browserManager
+        )
+        addTab(newTab)
+        setActiveTab(newTab)
+        return newTab
+    }
+
+    // Create a new tab with an existing WebView (used for Peek transfers)
+    @discardableResult
+    func createNewTabWithWebView(
+        url: String = "https://www.google.com",
+        in space: Space? = nil,
+        existingWebView: WKWebView? = nil
+    ) -> Tab {
+        let engine = nookSettings?.searchEngine ?? .google
+        let normalizedUrl = normalizeURL(url, provider: engine)
+        guard let validURL = URL(string: normalizedUrl)
+        else {
+            print("Invalid URL: \(url). Falling back to default.")
+            return createNewTab(in: space)
+        }
+
+        let targetSpace: Space? = space ?? currentSpace ?? ensureDefaultSpaceIfNeeded()
+        // Ensure the target space has a profile assignment; backfill from currentProfile if missing
+        if let ts = targetSpace, ts.profileId == nil {
+            let defaultProfileId = browserManager?.currentProfile?.id ?? browserManager?.profileManager.profiles.first?.id
+            if let pid = defaultProfileId {
+                ts.profileId = pid
+                persistSnapshot()
+            }
+        }
+        let sid = targetSpace?.id
+
+        // Get existing tabs and increment their indices to make room for new tab at top
+        let existingTabs = sid.flatMap { tabsBySpace[$0] } ?? []
+        let incrementedTabs = existingTabs.map { tab in
+            tab.index += 1
+            return tab
+        }
+
+        // Update the tabs array with incremented indices
+        if let sid = sid {
+            setTabs(incrementedTabs, for: sid)
+        }
+
+        let newTab = Tab(
+            url: validURL,
+            name: "New Tab",
+            favicon: "globe",
+            spaceId: sid,
+            index: 0, // New tabs get index 0 to appear at top
+            browserManager: browserManager,
+            existingWebView: existingWebView
         )
         addTab(newTab)
         setActiveTab(newTab)
@@ -1488,7 +1562,7 @@ class TabManager: ObservableObject {
         // Keep the opposite side focused so the remaining pane stays visible.
         if let sm = browserManager?.splitManager, let bm = browserManager {
             // Check all windows for split state
-            for (windowId, _) in bm.windowStates {
+            for (windowId, _) in bm.windowRegistry?.windows ?? [:] {
                 if sm.isSplit(for: windowId) {
                     if sm.leftTabId(for: windowId) == tab.id {
                         sm.exitSplit(keep: .right, for: windowId)
@@ -1579,6 +1653,17 @@ class TabManager: ObservableObject {
     }
 
     // MARK: - Tab Ordering
+
+    /// Moves a tab to a different space
+    func moveTab(_ tabId: UUID, to targetSpaceId: UUID) {
+        guard let tab = allTabs().first(where: { $0.id == tabId }),
+              let currentSpaceId = tab.spaceId,
+              currentSpaceId != targetSpaceId else { return }
+
+        // Move to target space at the end of regular tabs
+        let targetTabs = tabsBySpace[targetSpaceId] ?? []
+        moveTabBetweenSpaces(tab, from: currentSpaceId, to: targetSpaceId, asSpacePinned: false, toIndex: targetTabs.count)
+    }
 
     func moveTabUp(_ tabId: UUID) {
         guard let spaceId = findSpaceForTab(tabId) else { return }
@@ -2049,6 +2134,9 @@ class TabManager: ObservableObject {
             }
             // If we assigned default profile to legacy pinned tabs, persist to capture migrations
             if __didAssignDefaultProfile { persistSnapshot() }
+            
+            // Notify that initial data load is complete so window states can be updated
+            NotificationCenter.default.post(name: .tabManagerDidLoadInitialData, object: nil)
         } catch {
             print("SwiftData load error: \(error)")
         }
@@ -2601,7 +2689,7 @@ extension TabManager {
 
         // Force unload the tab from compositor before removing
         browserManager?.compositorManager.unloadTab(tab)
-        browserManager?.removeAllWebViews(for: tab)
+        browserManager?.webViewCoordinator?.removeAllWebViews(for: tab)
 
         if #available(macOS 15.5, *) {
             ExtensionManager.shared.notifyTabClosed(tab)

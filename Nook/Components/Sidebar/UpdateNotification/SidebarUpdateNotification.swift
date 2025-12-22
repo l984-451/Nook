@@ -9,8 +9,8 @@ import SwiftUI
 
 struct SidebarUpdateNotification: View {
     @EnvironmentObject var browserManager: BrowserManager
-    @EnvironmentObject var windowState: BrowserWindowState
-    @Environment(SettingsManager.self) var settingsManager
+    @Environment(BrowserWindowState.self) private var windowState
+    @Environment(\.nookSettings) var settingsManager
     let downloadsMenuVisible: Bool
     @State private var isVisible: Bool = false
     @State private var isExpanded: Bool = false
@@ -105,8 +105,8 @@ struct SidebarUpdateNotification: View {
             .animation(.easeInOut(duration: 0.2), value: isExpanded)
             .onAppear {
                 showNotification()
-                Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
-                    gradientPhase += 0.005
+                withAnimation(.linear(duration: 2.0).repeatForever(autoreverses: false)) {
+                    gradientPhase = 1.0
                 }
             }
             .onChange(of: shouldShowNotification) { _, newValue in

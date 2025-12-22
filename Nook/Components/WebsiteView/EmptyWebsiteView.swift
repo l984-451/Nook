@@ -10,7 +10,7 @@ import SwiftUI
 struct EmptyWebsiteView: View {
     @Environment(\.colorScheme) var colorScheme
     @EnvironmentObject var browserManager: BrowserManager
-    @EnvironmentObject var windowState: BrowserWindowState
+    @Environment(BrowserWindowState.self) private var windowState
 
     var body: some View {
         GeometryReader { proxy in
@@ -18,9 +18,6 @@ struct EmptyWebsiteView: View {
                 // Match the exact background and styling of the real webview
                 Color(nsColor: .windowBackgroundColor).opacity(0.2)
                     .clipShape(RoundedRectangle(cornerRadius: {
-                        if windowState.isFullScreen {
-                            return 0
-                        }
                         if #available(macOS 26.0, *) {
                             return 12
                         } else {

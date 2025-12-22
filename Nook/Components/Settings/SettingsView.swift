@@ -12,11 +12,22 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var browserManager: BrowserManager
     @EnvironmentObject var gradientColorManager: GradientColorManager
+    @Environment(\.nookSettings) var nookSettings
 
     var body: some View {
-        TabView(selection: $browserManager.settingsManager.currentSettingsTab) {
+        SettingsContent(nookSettings: nookSettings, browserManager: browserManager, gradientColorManager: gradientColorManager)
+    }
+}
+
+private struct SettingsContent: View {
+    @Bindable var nookSettings: NookSettingsService
+    @ObservedObject var browserManager: BrowserManager
+    @ObservedObject var gradientColorManager: GradientColorManager
+
+    var body: some View {
+        TabView(selection: $nookSettings.currentSettingsTab) {
             SettingsPane {
-                GeneralSettingsView()
+                SettingsGeneralTab()
             }
             .tabItem {
                 Label(
@@ -25,6 +36,26 @@ struct SettingsView: View {
                 )
             }
             .tag(SettingsTabs.general)
+            SettingsPane {
+                SettingsAppearanceTab()
+            }
+            .tabItem {
+                Label(
+                    SettingsTabs.appearance.name,
+                    systemImage: SettingsTabs.appearance.icon
+                )
+            }
+            .tag(SettingsTabs.appearance)
+            SettingsPane {
+                SettingsAITab()
+            }
+            .tabItem {
+                Label(
+                    SettingsTabs.ai.name,
+                    systemImage: SettingsTabs.ai.icon
+                )
+            }
+            .tag(SettingsTabs.ai)
 
             SettingsPane {
                 PrivacySettingsView()
@@ -60,19 +91,22 @@ struct SettingsView: View {
             }
             .tag(SettingsTabs.shortcuts)
 
-            if #available(macOS 15.5, *), browserManager.settingsManager.experimentalExtensions {
-                SettingsPane {
-                    ExtensionsSettingsView()
-                }
-                .tabItem {
-                    Label(
-                        SettingsTabs.extensions.name,
-                        systemImage: SettingsTabs.extensions.icon
-                    )
-                }
-                .tag(SettingsTabs.extensions)
-            }
+            // DISABLED: Extensions feature temporarily disabled
+            // if #available(macOS 15.5, *), nookSettings.experimentalExtensions {
+            //     SettingsPane {
+            //         ExtensionsSettingsView()
+            //     }
+            //     .tabItem {
+            //         Label(
+            //             SettingsTabs.extensions.name,
+            //             systemImage: SettingsTabs.extensions.icon
+            //         )
+            //     }
+            //     .tag(SettingsTabs.extensions)
+            // }
 
+
+            #if DEBUG
             SettingsPane {
                 AdvancedSettingsView()
             }
@@ -83,23 +117,25 @@ struct SettingsView: View {
                 )
             }
             .tag(SettingsTabs.advanced)
+            #endif
 
         }
-        .onChange(of: browserManager.settingsManager.experimentalExtensions) { _, experimentalEnabled in
-            // If extensions are disabled and the current tab is extensions, switch to a valid tab
-            if !experimentalEnabled && browserManager.settingsManager.currentSettingsTab == .extensions {
-                browserManager.settingsManager.currentSettingsTab = .advanced
-            }
-
-            // Handle extension state when experimental flag changes
-            if experimentalEnabled {
-                // Re-enable extensions that were previously enabled
-                browserManager.extensionManager?.enableAllExtensions()
-            } else {
-                // Disable all extensions when experimental support is turned off
-                browserManager.extensionManager?.disableAllExtensions()
-            }
-        }
+        // DISABLED: Extensions feature temporarily disabled
+        // .onChange(of: nookSettings.experimentalExtensions) { _, experimentalEnabled in
+        //     // If extensions are disabled and the current tab is extensions, switch to a valid tab
+        //     if !experimentalEnabled && nookSettings.currentSettingsTab == .extensions {
+        //         nookSettings.currentSettingsTab = .advanced
+        //     }
+        //
+        //     // Handle extension state when experimental flag changes
+        //     if experimentalEnabled {
+        //         // Re-enable extensions that were previously enabled
+        //         browserManager.extensionManager?.enableAllExtensions()
+        //     } else {
+        //         // Disable all extensions when experimental support is turned off
+        //         browserManager.extensionManager?.disableAllExtensions()
+        //     }
+        // }
     }
 }
 
@@ -109,8 +145,8 @@ private struct SettingsPane<Content: View>: View {
     init(@ViewBuilder content: () -> Content) {
         self.content = content()
     }
-    private let fixedHeight: CGFloat = 620
-    private let minWidth: CGFloat = 760
+    private let fixedHeight: CGFloat = 500
+    private let minWidth: CGFloat = 500
 
     var body: some View {
         ScrollView {
@@ -121,7 +157,7 @@ private struct SettingsPane<Content: View>: View {
             .padding(20)
         }
         .scrollIndicators(.automatic)
-        .frame(minWidth: minWidth)
+        .frame(minWidth: minWidth, maxWidth: 675)
         .frame(
             minHeight: fixedHeight,
             idealHeight: fixedHeight,
@@ -147,8 +183,11 @@ struct SettingsTabItem: View {
 
 struct GeneralSettingsView: View {
     @EnvironmentObject var browserManager: BrowserManager
+    @Environment(\.nookSettings) var nookSettings
 
     var body: some View {
+        @Bindable var settings = nookSettings
+
         HStack(alignment: .top, spacing: 16) {
             // Hero card
             SettingsHeroCard()
@@ -161,41 +200,43 @@ struct GeneralSettingsView: View {
                         title: "Appearance",
                         subtitle: "Window materials and visual style"
                     ) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text("Background Material")
-                            Spacer()
-                            Picker(
-                                "Background Material",
-                                selection: $browserManager.settingsManager
-                                    .currentMaterialRaw
-                            ) {
-                                ForEach(materials, id: \.value.rawValue) {
-                                    material in
-                                    Text(material.name).tag(
-                                        material.value.rawValue
-                                    )
+                        VStack{
+                            HStack(alignment: .firstTextBaseline) {
+                                Text("Background Material")
+                                Spacer()
+                                Picker(
+                                    "Background Material",
+                                    selection: $settings
+                                        .currentMaterialRaw
+                                ) {
+                                    ForEach(materials, id: \.value.rawValue) {
+                                        material in
+                                        Text(material.name).tag(
+                                            material.value.rawValue
+                                        )
+                                    }
                                 }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(width: 220)
                             }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                            .frame(width: 220)
+                            HStack(alignment: .firstTextBaseline) {
+                                Text("Pinned Tabs Look")
+                                Spacer()
+                                Picker(
+                                    "pinned tabs",
+                                    selection: $settings.pinnedTabsLook
+                                ) {
+                                    ForEach(PinnedTabsConfiguration.allCases) { config in
+                                        Text(config.name).tag(config)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(width: 220)
+                            }
                         }
 
-                        Divider().opacity(0.4)
-
-                        Toggle(
-                            isOn: $browserManager.settingsManager
-                                .isLiquidGlassEnabled
-                        ) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Liquid Glass")
-                                Text(
-                                    "Enable frosted translucency for UI surfaces"
-                                )
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            }
-                        }
                     }
                     
                     SettingsSectionCard(
@@ -204,7 +245,7 @@ struct GeneralSettingsView: View {
                     ) {
                         VStack(alignment: .leading, spacing: 16) {
                             Toggle(
-                                isOn: $browserManager.settingsManager
+                                isOn: $settings
                                     .askBeforeQuit
                             ) {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -221,7 +262,7 @@ struct GeneralSettingsView: View {
                                 Spacer()
                                 Picker(
                                     "Sidebar Position",
-                                    selection: $browserManager.settingsManager
+                                    selection: $settings
                                         .sidebarPosition
                                 ) {
                                     ForEach(SidebarPosition.allCases) { provider in
@@ -234,13 +275,29 @@ struct GeneralSettingsView: View {
                             }
                             
                             Toggle(
-                                isOn: $browserManager.settingsManager
+                                isOn: $settings
                                     .topBarAddressView
                             ) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Top Bar Address View")
                                     Text(
                                         "Show address bar and navigation buttons at the top of the window"
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            Divider().opacity(0.4)
+                            
+                            Toggle(
+                                isOn: $settings
+                                    .showLinkStatusBar
+                            ) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Link Status Bar")
+                                    Text(
+                                        "Show URL preview when hovering over links"
                                     )
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -258,7 +315,7 @@ struct GeneralSettingsView: View {
                             Spacer()
                             Picker(
                                 "Search Engine",
-                                selection: $browserManager.settingsManager
+                                selection: $settings
                                     .searchEngine
                             ) {
                                 ForEach(SearchProvider.allCases) { provider in
@@ -279,17 +336,17 @@ struct GeneralSettingsView: View {
                             HStack(alignment: .firstTextBaseline) {
                                 Text("Enable AI Assistant")
                                 Spacer()
-                                Toggle("", isOn: $browserManager.settingsManager.showAIAssistant)
+                                Toggle("", isOn: $settings.showAIAssistant)
                                     .labelsHidden()
                             }
                             
-                            if browserManager.settingsManager.showAIAssistant {
+                            if nookSettings.showAIAssistant {
                                 Divider().opacity(0.4)
                                 
                                 HStack(alignment: .firstTextBaseline) {
                                     Text("Gemini API Key")
                                     Spacer()
-                                    SecureField("Enter API Key", text: $browserManager.settingsManager.geminiApiKey)
+                                    SecureField("Enter API Key", text: $settings.geminiApiKey)
                                         .textFieldStyle(.roundedBorder)
                                         .frame(width: 220)
                                 }
@@ -308,7 +365,7 @@ struct GeneralSettingsView: View {
                                     Spacer()
                                     Picker(
                                         "Model",
-                                        selection: $browserManager.settingsManager.geminiModel
+                                        selection: $settings.geminiModel
                                     ) {
                                         ForEach(GeminiModel.allCases) { model in
                                             VStack(alignment: .leading) {
@@ -325,7 +382,7 @@ struct GeneralSettingsView: View {
                                     .frame(width: 220)
                                 }
                                 
-                                Text(browserManager.settingsManager.geminiModel.description)
+                                Text(nookSettings.geminiModel.description)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -345,13 +402,12 @@ struct GeneralSettingsView: View {
                                     selection: Binding<TimeInterval>(
                                         get: {
                                             nearestTimeoutOption(
-                                                to: browserManager
-                                                    .settingsManager
+                                                to: nookSettings
                                                     .tabUnloadTimeout
                                             )
                                         },
                                         set: { newValue in
-                                            browserManager.settingsManager
+                                            nookSettings
                                                 .tabUnloadTimeout = newValue
                                         }
                                     )
@@ -365,10 +421,10 @@ struct GeneralSettingsView: View {
                                 .pickerStyle(.menu)
                                 .frame(width: 220)
                                 .onAppear {
-                                    browserManager.settingsManager
+                                    nookSettings
                                         .tabUnloadTimeout =
                                         nearestTimeoutOption(
-                                            to: browserManager.settingsManager
+                                            to: nookSettings
                                                 .tabUnloadTimeout
                                         )
                                 }
@@ -1010,15 +1066,13 @@ private struct MigrationControls: View {
 
 struct ShortcutsSettingsView: View {
     @EnvironmentObject var browserManager: BrowserManager
+    @Environment(\.nookSettings) var nookSettings
     @State private var searchText = ""
     @State private var selectedCategory: ShortcutCategory? = nil
-
-    private var shortcutManager: KeyboardShortcutManager {
-        browserManager.settingsManager.keyboardShortcutManager
-    }
+    @Environment(KeyboardShortcutManager.self) var keyboardShortcutManager
 
     private var filteredShortcuts: [KeyboardShortcut] {
-        var filtered = shortcutManager.shortcuts
+        var filtered = keyboardShortcutManager.shortcuts
 
         // Filter by category
         if let category = selectedCategory {
@@ -1058,7 +1112,7 @@ struct ShortcutsSettingsView: View {
                 }
                 Spacer()
                 Button("Reset to Defaults") {
-                    shortcutManager.resetToDefaults()
+                    keyboardShortcutManager.resetToDefaults()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -1102,8 +1156,7 @@ struct ShortcutsSettingsView: View {
                         if let categoryShortcuts = shortcutsByCategory[category], !categoryShortcuts.isEmpty {
                             CategorySection(
                                 category: category,
-                                shortcuts: categoryShortcuts,
-                                shortcutManager: shortcutManager
+                                shortcuts: categoryShortcuts
                             )
                         }
                     }
@@ -1115,11 +1168,10 @@ struct ShortcutsSettingsView: View {
     }
 }
 
-// MARK: - Category Section
+/// MARK: - Category Section
 private struct CategorySection: View {
     let category: ShortcutCategory
     let shortcuts: [KeyboardShortcut]
-    @ObservedObject var shortcutManager: KeyboardShortcutManager
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1131,10 +1183,7 @@ private struct CategorySection: View {
 
             VStack(spacing: 8) {
                 ForEach(shortcuts, id: \.id) { shortcut in
-                    ShortcutRowView(
-                        shortcut: shortcut,
-                        shortcutManager: shortcutManager
-                    )
+                    ShortcutRowView(shortcut: shortcut)
                 }
             }
         }
@@ -1142,15 +1191,14 @@ private struct CategorySection: View {
     }
 }
 
-// MARK: - Shortcut Row
+/// MARK: - Shortcut Row
 private struct ShortcutRowView: View {
     let shortcut: KeyboardShortcut
-    @ObservedObject var shortcutManager: KeyboardShortcutManager
+    @Environment(KeyboardShortcutManager.self) var keyboardShortcutManager
     @State private var localKeyCombination: KeyCombination
 
-    init(shortcut: KeyboardShortcut, shortcutManager: KeyboardShortcutManager) {
+    init(shortcut: KeyboardShortcut) {
         self.shortcut = shortcut
-        self.shortcutManager = shortcutManager
         self._localKeyCombination = State(initialValue: shortcut.keyCombination)
     }
 
@@ -1173,7 +1221,7 @@ private struct ShortcutRowView: View {
                 ShortcutRecorderView(
                     keyCombination: $localKeyCombination,
                     action: shortcut.action,
-                    shortcutManager: shortcutManager,
+                    shortcutManager: keyboardShortcutManager,
                     onRecordingComplete: {
                         updateShortcut()
                     }
@@ -1192,7 +1240,7 @@ private struct ShortcutRowView: View {
                 Toggle("", isOn: Binding(
                     get: { shortcut.isEnabled },
                     set: { newValue in
-                        shortcutManager.toggleShortcut(action: shortcut.action, isEnabled: newValue)
+                        keyboardShortcutManager.toggleShortcut(action: shortcut.action, isEnabled: newValue)
                     }
                 ))
                 .toggleStyle(.switch)
@@ -1205,7 +1253,7 @@ private struct ShortcutRowView: View {
     }
 
     private func updateShortcut() {
-        shortcutManager.updateShortcut(action: shortcut.action, keyCombination: localKeyCombination)
+        keyboardShortcutManager.updateShortcut(action: shortcut.action, keyCombination: localKeyCombination)
     }
 }
 
@@ -1401,28 +1449,32 @@ struct ExtensionRowView: View {
 
 struct AdvancedSettingsView: View {
     @EnvironmentObject var browserManager: BrowserManager
+    @Environment(\.nookSettings) var nookSettings
 
     var body: some View {
+        @Bindable var settings = nookSettings
+        return
         VStack(alignment: .leading, spacing: 16) {
-            if #available(macOS 15.5, *) {
-                SettingsSectionCard(
-                    title: "Experimental Features",
-                    subtitle: "Features in development"
-                ) {
-                    Toggle(
-                        isOn: $browserManager.settingsManager.experimentalExtensions
-                    ) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("EXPERIMENTAL: Enable Extension Support")
-                            Text(
-                                "Enable browser extension support. Extensions are experimental and may cause instability or security issues."
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
+            // DISABLED: Extensions feature temporarily disabled
+            // if #available(macOS 15.5, *) {
+            //     SettingsSectionCard(
+            //         title: "Experimental Features",
+            //         subtitle: "Features in development"
+            //     ) {
+            //         Toggle(
+            //             isOn: $settings.experimentalExtensions
+            //         ) {
+            //             VStack(alignment: .leading, spacing: 2) {
+            //                 Text("EXPERIMENTAL: Enable Extension Support")
+            //                 Text(
+            //                     "Enable browser extension support. Extensions are experimental and may cause instability or security issues."
+            //                 )
+            //                 .font(.caption)
+            //                 .foregroundStyle(.secondary)
+            //             }
+            //         }
+            //     }
+            // }
 
             #if DEBUG
             SettingsSectionCard(
@@ -1430,7 +1482,7 @@ struct AdvancedSettingsView: View {
                 subtitle: "Development and debugging features"
             ) {
                 Toggle(
-                    isOn: $browserManager.settingsManager.debugToggleUpdateNotification
+                    isOn: $settings.debugToggleUpdateNotification
                 ) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Show Update Notification")

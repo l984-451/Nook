@@ -45,19 +45,25 @@ class ObservableTabWrapper: ObservableObject {
 
 struct NavButtonsView: View {
     @EnvironmentObject var browserManager: BrowserManager
-    @EnvironmentObject var windowState: BrowserWindowState
+    @Environment(BrowserWindowState.self) private var windowState
+    @Environment(\.nookSettings) var nookSettings
     var effectiveSidebarWidth: CGFloat?
     @StateObject private var tabWrapper = ObservableTabWrapper()
     @State private var isMenuHovered = false
-    
+
     var body: some View {
-        let sidebarOnLeft = browserManager.settingsManager.sidebarPosition == .left
+        let sidebarOnLeft = nookSettings.sidebarPosition == .left
         let sidebarWidthForLayout = effectiveSidebarWidth ?? windowState.sidebarWidth
-        let navigationCollapseThreshold: CGFloat = 250
-        let refreshCollapseThreshold: CGFloat = 210
-        
+
+        // Adjust thresholds based on whether AI button is shown
+        // When AI is disabled, we have more space, so thresholds are lower
+        let navigationCollapseThreshold: CGFloat = nookSettings.showAIAssistant ? 280 : 250
+        let refreshCollapseThreshold: CGFloat = nookSettings.showAIAssistant ? 240 : 210
+        let aiChatCollapseThreshold: CGFloat = 220
+
         let shouldCollapseNavigation = sidebarWidthForLayout < navigationCollapseThreshold
         let shouldCollapseRefresh = sidebarWidthForLayout < refreshCollapseThreshold
+        let shouldCollapseAIChat = sidebarWidthForLayout < aiChatCollapseThreshold
         
         HStack(spacing: 2) {
             if sidebarOnLeft {
@@ -72,7 +78,7 @@ struct NavButtonsView: View {
             .buttonStyle(NavButtonStyle())
             .foregroundStyle(Color.primary)
             
-            if browserManager.settingsManager.showAIAssistant {
+            if nookSettings.showAIAssistant && !shouldCollapseAIChat {
                 Button("Toggle AI Assistant", systemImage: "sparkle") {
                     browserManager.toggleAISidebar(for: windowState)
                 }
@@ -87,7 +93,8 @@ struct NavButtonsView: View {
                 if shouldCollapseNavigation {
                     collapsedMenu(
                         includeNavigation: true,
-                        includeRefresh: shouldCollapseRefresh
+                        includeRefresh: shouldCollapseRefresh,
+                        includeAIChat: shouldCollapseAIChat && nookSettings.showAIAssistant
                     )
                 } else {
                     HStack(alignment: .center, spacing: 8) {
@@ -116,10 +123,11 @@ struct NavButtonsView: View {
                             }
                     }
                     
-                    if shouldCollapseRefresh {
+                    if shouldCollapseRefresh || shouldCollapseAIChat {
                         collapsedMenu(
                             includeNavigation: false,
-                            includeRefresh: true
+                            includeRefresh: shouldCollapseRefresh,
+                            includeAIChat: shouldCollapseAIChat && nookSettings.showAIAssistant
                         )
                     }
                 }
@@ -185,23 +193,32 @@ struct NavButtonsView: View {
     }
     
     @ViewBuilder
-    private func collapsedMenu(includeNavigation: Bool, includeRefresh: Bool) -> some View {
-        if includeNavigation || includeRefresh {
+    private func collapsedMenu(includeNavigation: Bool, includeRefresh: Bool, includeAIChat: Bool = false) -> some View {
+        if includeNavigation || includeRefresh || includeAIChat {
             Menu {
                 if includeNavigation {
                     Button(action: goBack) {
                         Label("Go Back", systemImage: "arrow.backward")
                     }
                     .disabled(!tabWrapper.canGoBack)
-                    
+
                     Button(action: goForward) {
                         Label("Go Forward", systemImage: "arrow.forward")
                     }
                     .disabled(!tabWrapper.canGoForward)
                 }
-                
-                if includeRefresh {
+
+                if includeAIChat {
                     if includeNavigation {
+                        Divider()
+                    }
+                    Button(action: { browserManager.toggleAISidebar(for: windowState) }) {
+                        Label("Toggle AI Assistant", systemImage: "sparkle")
+                    }
+                }
+
+                if includeRefresh {
+                    if includeNavigation || includeAIChat {
                         Divider()
                     }
                     Button(action: refreshCurrentTab) {
@@ -209,22 +226,11 @@ struct NavButtonsView: View {
                     }
                 }
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.primary)
-                    .frame(width: 32, height: 32)
-                    .contentShape(RoundedRectangle(cornerRadius: 6))
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(isMenuHovered ? Color.gray.opacity(0.1) : Color.clear)
-                    )
-                    .onHover { isHovered in
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            isMenuHovered = isHovered
-                        }
-                    }
+                Label("Navigation", systemImage: "ellipsis")
+                .labelStyle(.iconOnly)
             }
-            .buttonStyle(PlainButtonStyle())
+            .menuStyle(.button)
+            .buttonStyle(NavButtonStyle())
         }
     }
 }

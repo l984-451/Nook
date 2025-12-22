@@ -17,39 +17,57 @@ struct PinnedTabView: View {
 
     @EnvironmentObject var browserManager: BrowserManager
     @Environment(\.colorScheme) var colorScheme
+    @Environment(\.nookSettings) var nookSettings
     @State private var isHovered: Bool = false
 
-    // Layout tunables
-    private let corner: CGFloat = 16
-    private let iconSize: CGFloat = 20
-    private let innerPadding: CGFloat = 16
-
     // Stroke overlay tunables
-    private let strokeThickness: CGFloat = 2.5   // ring thickness
-    private let faviconScale: CGFloat = 10.0      // favicon scale to fit the ring
-    private let faviconBlur: CGFloat = 80.0      // blur applied to favicon
+    private let faviconScale: CGFloat = 6.0      // favicon scale to fit the ring
+    private let faviconBlur: CGFloat = 30.0      // blur applied to favicon
 
     var body: some View {
+        let pinnedTabsConfiguration: PinnedTabsConfiguration = nookSettings.pinnedTabsLook
         Button(action: action) {
             ZStack {
-                RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .fill(backgroundColor)
-                    .animation(.easeInOut(duration: 0.2), value: isHovered)
-                    .shadow(color: shadowColor, radius: 1, y: 2)
+                ZStack {
+                    RoundedRectangle(cornerRadius: pinnedTabsConfiguration.cornerRadius, style: .continuous)
+                        .fill(
+                            backgroundColor
+                        )
+                        .animation(.easeInOut(duration: 0.1), value: isHovered)
+                        .overlay {
+                            if isActive {
+                                tabIcon
+                                    .blur(radius: 30)
+                                    .opacity(0.5)
+                            }
+          
+                        }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: pinnedTabsConfiguration.cornerRadius, style: .continuous))
 
-                tabIcon
-                    .resizable()
-                    .interpolation(.high)
-                    .antialiased(true)
-                    .scaledToFit()
-                    .frame(width: iconSize, height: iconSize)
-                    .padding(.vertical, innerPadding)
+                
+                HStack {
+                    Spacer()
+                    VStack {
+                        Spacer()
+                        tabIcon
+                            .resizable()
+                            .interpolation(.high)
+                            .antialiased(true)
+                            .scaledToFit()
+                            .frame(height: pinnedTabsConfiguration.faviconHeight)
+                        Spacer()
+                    }
+
+                    Spacer()
+                }
+
 
                 // Favicon-based stroke overlay
                 if isActive {
                     faviconStrokeOverlay(
-                        corner: corner,
-                        thickness: strokeThickness,
+                        corner: pinnedTabsConfiguration.cornerRadius,
+                        thickness: pinnedTabsConfiguration.strokeWidth,
                         scale: faviconScale,
                         blur: faviconBlur
                     )
@@ -57,7 +75,9 @@ struct PinnedTabView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .contentShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+            .frame(height: pinnedTabsConfiguration.height)
+            .frame(minWidth: pinnedTabsConfiguration.minWidth)
+            .contentShape(RoundedRectangle(cornerRadius: pinnedTabsConfiguration.cornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering in

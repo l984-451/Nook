@@ -10,15 +10,17 @@ import UniformTypeIdentifiers
 struct PinnedGrid: View {
     let width: CGFloat
     let profileId: UUID?
-    let minButtonWidth: CGFloat = 50
-    let itemSpacing: CGFloat = 8
-    let rowSpacing: CGFloat = 6
-    let maxColumns: Int = 3
+    
 
     @EnvironmentObject var browserManager: BrowserManager
-    @EnvironmentObject var windowState: BrowserWindowState
+    @Environment(BrowserWindowState.self) private var windowState
+    @Environment(WindowRegistry.self) private var windowRegistry
     @Environment(\.colorScheme) var colorScheme
+    @Environment(\.nookSettings) var nookSettings
     @State private var draggedItem: UUID? = nil
+    
+//    private let pinnedTabsConfiguration: PinnedTabsConfiguration = .large
+
     
     init(width: CGFloat, profileId: UUID? = nil) {
         self.width = width
@@ -26,6 +28,7 @@ struct PinnedGrid: View {
     }
 
     var body: some View {
+        let pinnedTabsConfiguration: PinnedTabsConfiguration = nookSettings.pinnedTabsLook
         // Use profile-filtered essentials
         let effectiveProfileId = profileId ?? windowState.currentProfileId ?? browserManager.currentProfile?.id
         let items: [Tab] = effectiveProfileId != nil
@@ -34,40 +37,65 @@ struct PinnedGrid: View {
         let colsCount: Int = columnCount(for: width, itemCount: items.count)
         let columns: [GridItem] = makeColumns(count: colsCount)
         
-        let shouldAnimate = (browserManager.activeWindowState?.id == windowState.id) && !browserManager.isTransitioningProfile
+        let shouldAnimate = (windowRegistry.activeWindow?.id == windowState.id) && !browserManager.isTransitioningProfile
 
         // For embedded use, return proper sized container even when empty to support transitions
         if items.isEmpty {
             let isDragging = draggedItem != nil
-            let backgroundColor = isDragging
-                ? (colorScheme == .dark ? AppColors.pinnedTabHoverLight : AppColors.pinnedTabHoverDark)
-                : Color.clear
 
             return AnyView(
-                backgroundColor
-                    .frame(height: isDragging ? 44 : 10)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .animation(.easeInOut(duration: 0.15), value: isDragging)
-                    .onDrop(
-                        of: [.text],
-                        delegate: SidebarSectionDropDelegateSimple(
-                            itemsCount: { 0 },
-                            draggedItem: $draggedItem,
-                            targetSection: .essentials,
-                            tabManager: browserManager.tabManager,
-                            targetIndex: nil,
-                            onDropEntered: {
-                                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-                            }
+                VStack(spacing: 8) {
+                    Image(systemName: "star.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+
+                    VStack(spacing: 2) {
+                        Text("Drag to add Favorites")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+
+                        Text("Favorites keep your most\nused sites and apps close")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .padding(.horizontal, 12)
+                .background {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
+                        .foregroundStyle(isDragging ? Color.primary.opacity(0.4) : Color.secondary.opacity(0.3))
+                }
+                .background {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(isDragging
+                            ? (colorScheme == .dark ? AppColors.pinnedTabHoverLight : AppColors.pinnedTabHoverDark)
+                            : Color.clear
                         )
+                }
+                .animation(.easeInOut(duration: 0.15), value: isDragging)
+                .onDrop(
+                    of: [.text],
+                    delegate: SidebarSectionDropDelegateSimple(
+                        itemsCount: { 0 },
+                        draggedItem: $draggedItem,
+                        targetSection: .essentials,
+                        tabManager: browserManager.tabManager,
+                        targetIndex: nil,
+                        onDropEntered: {
+                            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+                        }
                     )
+                )
             )
         }
         
         return AnyView(ZStack { // Container to support transitions
             VStack(spacing: 6) {
                 ZStack(alignment: .top) {
-                    LazyVGrid(columns: columns, alignment: .center, spacing: rowSpacing) {
+                    LazyVGrid(columns: columns, alignment: .center, spacing: pinnedTabsConfiguration.gridSpacing) {
                         ForEach(Array(items.enumerated()), id: \.element.id) { index, tab in
                             let isActive: Bool = (browserManager.currentTab(for: windowState)?.id == tab.id)
                             let title: String = safeTitle(tab)
@@ -131,9 +159,9 @@ struct PinnedGrid: View {
 
     private func columnCount(for width: CGFloat, itemCount: Int) -> Int {
         guard width > 0, itemCount > 0 else { return 1 }
-        var cols = min(maxColumns, itemCount)
+        var cols = min(nookSettings.pinnedTabsLook.maxColumns, itemCount)
         while cols > 1 {
-            let needed = CGFloat(cols) * minButtonWidth + CGFloat(cols - 1) * itemSpacing
+            let needed = CGFloat(cols) * nookSettings.pinnedTabsLook.minWidth + CGFloat(cols - 1) * nookSettings.pinnedTabsLook.gridSpacing
             if needed <= width { break }
             cols -= 1
         }
@@ -143,8 +171,8 @@ struct PinnedGrid: View {
     private func makeColumns(count: Int) -> [GridItem] {
         Array(
             repeating: GridItem(
-                .flexible(minimum: minButtonWidth),
-                spacing: itemSpacing,
+                .flexible(minimum: nookSettings.pinnedTabsLook.minWidth),
+                spacing: nookSettings.pinnedTabsLook.gridSpacing,
                 alignment: .center
             ),
             count: count

@@ -1,25 +1,28 @@
 import SwiftUI
 
+
 @MainActor
 final class SplitViewManager: ObservableObject {
     enum Side { case left, right }
-
     // MARK: - State
     @Published var isSplit: Bool = false
     @Published var leftTabId: UUID? = nil
     @Published var rightTabId: UUID? = nil
     @Published private(set) var dividerFraction: CGFloat = 0.5 // 0.0 = all left, 1.0 = all right
+    @Published var activeSide: Side? = nil
 
     // Preview state during drag-over of the web content
     @Published var isPreviewActive: Bool = false
     @Published var previewSide: Side? = nil
+    @Published var dragLocation: CGPoint? = nil // Track drag location for magnetic cards
 
     // Limits for divider movement
     let minFraction: CGFloat = 0.2
     let maxFraction: CGFloat = 0.8
 
     weak var browserManager: BrowserManager?
-    
+    weak var windowRegistry: WindowRegistry?
+
     // Window-specific split state
     private var windowSplitStates: [UUID: WindowSplitState] = [:]
     
@@ -30,6 +33,8 @@ final class SplitViewManager: ObservableObject {
         var dividerFraction: CGFloat = 0.5
         var isPreviewActive: Bool = false
         var previewSide: Side? = nil
+        var activeSide: Side? = nil
+        var dragLocation: CGPoint? = nil // Track drag location per window
     }
 
     init(browserManager: BrowserManager? = nil) {
@@ -45,6 +50,7 @@ final class SplitViewManager: ObservableObject {
     
     /// Set split state for a specific window
     func setSplitState(_ state: WindowSplitState, for windowId: UUID) {
+        objectWillChange.send()
         windowSplitStates[windowId] = state
         syncPublishedStateIfNeeded(for: windowId)
     }
@@ -81,7 +87,7 @@ final class SplitViewManager: ObservableObject {
 
     /// Keep legacy published properties aligned with the active window's state
     private func syncPublishedStateIfNeeded(for windowId: UUID) {
-        guard let bm = browserManager, bm.activeWindowState?.id == windowId else { return }
+        guard let bm = browserManager, windowRegistry?.activeWindow?.id == windowId else { return }
         updatePublishedState(from: getSplitState(for: windowId))
     }
 
@@ -92,6 +98,8 @@ final class SplitViewManager: ObservableObject {
         dividerFraction = state.dividerFraction
         isPreviewActive = state.isPreviewActive
         previewSide = state.previewSide
+        activeSide = state.activeSide
+        dragLocation = state.dragLocation
     }
 
     func refreshPublishedState(for windowId: UUID) {
@@ -105,11 +113,20 @@ final class SplitViewManager: ObservableObject {
         state.leftTabId = leftTabId
         state.rightTabId = rightTabId
         state.dividerFraction = 0.5
+        // Set active side based on which tab is currently active in this window
+        if let windowState = browserManager?.windowRegistry?.windows[windowId],
+           let currentTabId = windowState.currentTabId {
+            if currentTabId == leftTabId {
+                state.activeSide = .left
+            } else if currentTabId == rightTabId {
+                state.activeSide = .right
+            }
+        }
         setSplitState(state, for: windowId)
         
         // Note: No need to update tab display ownership since windows are independent
         
-        if let windowState = browserManager?.windowStates[windowId] {
+        if let windowState = browserManager?.windowRegistry?.windows[windowId] {
             browserManager?.refreshCompositor(for: windowState)
         }
         
@@ -126,11 +143,12 @@ final class SplitViewManager: ObservableObject {
         state.rightTabId = nil
         state.isPreviewActive = false
         state.previewSide = nil
+        state.activeSide = nil
         setSplitState(state, for: windowId)
         
         // Note: No need to update tab display ownership since windows are independent
         
-        if let windowState = browserManager?.windowStates[windowId] {
+        if let windowState = browserManager?.windowRegistry?.windows[windowId] {
             browserManager?.refreshCompositor(for: windowState)
         }
         
@@ -142,7 +160,7 @@ final class SplitViewManager: ObservableObject {
         guard let bm = browserManager else { return }
         let state = getSplitState(for: windowId)
         guard state.isSplit else { return }
-        guard let windowState = bm.windowStates[windowId] else { return }
+        guard let windowState = bm.windowRegistry?.windows[windowId] else { return }
         
         switch side {
         case .left:
@@ -159,14 +177,30 @@ final class SplitViewManager: ObservableObject {
 
     func cleanupWindow(_ windowId: UUID) {
         windowSplitStates.removeValue(forKey: windowId)
-        if let bm = browserManager, bm.activeWindowState?.id == windowId {
+        if let bm = browserManager, windowRegistry?.activeWindow?.id == windowId {
             updatePublishedState(from: WindowSplitState())
         }
         print("🪟 [SplitViewManager] Cleaned up split state for window \(windowId)")
     }
+    
+    /// Handle tab closure to prevent "zombie split" state
+    func handleTabClosure(_ tabId: UUID) {
+        // Check all windows for split state involving this tab
+        for (windowId, state) in windowSplitStates {
+            if state.isSplit {
+                if state.leftTabId == tabId {
+                    print("🪟 [SplitViewManager] Closing left pane for window \(windowId) due to tab closure")
+                    exitSplit(keep: .right, for: windowId)
+                } else if state.rightTabId == tabId {
+                    print("🪟 [SplitViewManager] Closing right pane for window \(windowId) due to tab closure")
+                    exitSplit(keep: .left, for: windowId)
+                }
+            }
+        }
+    }
 
     func setDividerFraction(_ value: CGFloat) {
-        if let windowId = browserManager?.activeWindowState?.id {
+        if let windowId = windowRegistry?.activeWindow?.id {
             setDividerFraction(value, for: windowId)
         } else {
             let clamped = min(max(value, minFraction), maxFraction)
@@ -194,10 +228,53 @@ final class SplitViewManager: ObservableObject {
         if rightTabId == tabId { return .right }
         return nil
     }
+    
+    /// Get which side a tab is on for a specific window
+    func side(for tabId: UUID, in windowId: UUID) -> Side? {
+        let state = getSplitState(for: windowId)
+        if state.leftTabId == tabId { return .left }
+        if state.rightTabId == tabId { return .right }
+        return nil
+    }
+    
+    /// Get the active side for a specific window
+    func activeSide(for windowId: UUID) -> Side? {
+        return getSplitState(for: windowId).activeSide
+    }
+    
+    /// Set the active side for a specific window
+    func setActiveSide(_ side: Side?, for windowId: UUID) {
+        var state = getSplitState(for: windowId)
+        state.activeSide = side
+        setSplitState(state, for: windowId)
+    }
+    
+    /// Update the active side based on which tab is currently active
+    /// This should be called whenever a tab becomes active
+    func updateActiveSide(for tabId: UUID, in windowId: UUID) {
+        let state = getSplitState(for: windowId)
+        guard state.isSplit else {
+            // Not in split view, clear active side
+            if state.activeSide != nil {
+                var updatedState = state
+                updatedState.activeSide = nil
+                setSplitState(updatedState, for: windowId)
+            }
+            return
+        }
+        
+        // Determine which side this tab is on
+        let side = self.side(for: tabId, in: windowId)
+        if state.activeSide != side {
+            var updatedState = state
+            updatedState.activeSide = side
+            setSplitState(updatedState, for: windowId)
+        }
+    }
 
     // MARK: - Entry points
     func enterSplit(with tab: Tab, placeOn side: Side = .right, animate: Bool = true) {
-        guard let windowState = browserManager?.activeWindowState else { return }
+        guard let windowState = windowRegistry?.activeWindow else { return }
         enterSplit(with: tab, placeOn: side, in: windowState, animate: animate)
     }
 
@@ -222,9 +299,11 @@ final class SplitViewManager: ObservableObject {
             case .left: state.leftTabId = resolved.id
             case .right: state.rightTabId = resolved.id
             }
+            // Set active side to the side we're placing the tab on
+            state.activeSide = side
             setSplitState(state, for: windowId)
             bm.compositorManager.loadTab(resolved)
-            if let ws = bm.windowStates[windowId] {
+            if let ws = bm.windowRegistry?.windows[windowId] {
                 bm.refreshCompositor(for: ws)
             }
             return
@@ -250,6 +329,8 @@ final class SplitViewManager: ObservableObject {
         state.isSplit = true
         state.leftTabId = leftResolved.id
         state.rightTabId = rightResolved.id
+        // Set active side to the side containing the current tab (opposite of where new tab is placed)
+        state.activeSide = (side == .left) ? .right : .left
         setSplitState(state, for: windowId)
 
         bm.compositorManager.loadTab(leftResolved)
@@ -267,17 +348,17 @@ final class SplitViewManager: ObservableObject {
     }
 
     func exitSplit(keep side: Side = .left) {
-        guard let bm = browserManager, let activeWindow = bm.activeWindowState else { return }
+        guard let bm = browserManager, let activeWindow = windowRegistry?.activeWindow else { return }
         exitSplit(keep: side, for: activeWindow.id)
     }
 
     func closePane(_ side: Side) {
-        guard let bm = browserManager, let activeWindow = bm.activeWindowState else { return }
+        guard let bm = browserManager, let activeWindow = windowRegistry?.activeWindow else { return }
         closePane(side, for: activeWindow.id)
     }
 
     func swapSides() {
-        guard let bm = browserManager, let activeWindow = bm.activeWindowState else { return }
+        guard let bm = browserManager, let activeWindow = windowRegistry?.activeWindow else { return }
         swapSides(for: activeWindow.id)
     }
     
@@ -288,8 +369,12 @@ final class SplitViewManager: ObservableObject {
         let l = state.leftTabId
         state.leftTabId = state.rightTabId
         state.rightTabId = l
+        // Swap active side too
+        if let currentActiveSide = state.activeSide {
+            state.activeSide = (currentActiveSide == .left) ? .right : .left
+        }
         setSplitState(state, for: windowId)
-        if let windowState = browserManager?.windowStates[windowId] {
+        if let windowState = browserManager?.windowRegistry?.windows[windowId] {
             browserManager?.refreshCompositor(for: windowState)
         }
         
@@ -306,47 +391,61 @@ final class SplitViewManager: ObservableObject {
 
     // MARK: - Preview during drag-over
     func beginPreview(side: Side) {
-        guard let bm = browserManager, let windowState = bm.activeWindowState else { return }
+        guard let bm = browserManager, let windowState = windowRegistry?.activeWindow else { return }
         beginPreview(side: side, for: windowState.id)
     }
 
     func endPreview(cancel: Bool) {
-        guard let bm = browserManager, let windowState = bm.activeWindowState else { return }
+        guard let bm = browserManager, let windowState = windowRegistry?.activeWindow else { return }
         endPreview(cancel: cancel, for: windowState.id)
     }
 
-    func beginPreview(side: Side, for windowId: UUID) {
+    func beginPreview(side: Side?, for windowId: UUID) {
         var state = getSplitState(for: windowId)
         state.previewSide = side
-        if !state.isSplit, let bm = browserManager, let windowState = bm.windowStates[windowId], let current = bm.currentTab(for: windowState) {
-            if side == .right {
-                state.leftTabId = current.id
-            } else {
-                state.rightTabId = current.id
-            }
-            state.isSplit = true
-        }
+
         state.isPreviewActive = true
         setSplitState(state, for: windowId)
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-            setDividerFraction(0.5, for: windowId)
-        }
-        if let windowState = browserManager?.windowStates[windowId] {
+        if let windowState = browserManager?.windowRegistry?.windows[windowId] {
             browserManager?.refreshCompositor(for: windowState)
         }
+    }
+    
+    /// Update preview side when drag moves
+    func updatePreviewSide(_ side: Side?, for windowId: UUID) {
+        var state = getSplitState(for: windowId)
+        guard state.isPreviewActive else { return }
+        state.previewSide = side
+        setSplitState(state, for: windowId)
+    }
+    
+    /// Update drag location for magnetic card effect
+    func updateDragLocation(_ location: CGPoint?, for windowId: UUID) {
+        var state = getSplitState(for: windowId)
+        state.dragLocation = location
+        setSplitState(state, for: windowId)
+        // Also update published property if this is the active window
+        if windowRegistry?.activeWindow?.id == windowId {
+            dragLocation = location
+        }
+    }
+    
+    /// Get drag location for a specific window
+    func dragLocation(for windowId: UUID) -> CGPoint? {
+        return getSplitState(for: windowId).dragLocation
     }
 
     func endPreview(cancel: Bool, for windowId: UUID) {
         var state = getSplitState(for: windowId)
         state.isPreviewActive = false
         state.previewSide = nil
-        if cancel {
-            if state.leftTabId == nil || state.rightTabId == nil {
-                state.isSplit = false
-            }
-        }
+        state.dragLocation = nil // Clear drag location
         setSplitState(state, for: windowId)
-        if let windowState = browserManager?.windowStates[windowId] {
+        // Clear published property if this is the active window
+        if windowRegistry?.activeWindow?.id == windowId {
+            dragLocation = nil
+        }
+        if let windowState = browserManager?.windowRegistry?.windows[windowId] {
             browserManager?.refreshCompositor(for: windowState)
         }
     }

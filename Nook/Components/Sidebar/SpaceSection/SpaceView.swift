@@ -33,8 +33,10 @@ struct TabPositionPreferenceKey: PreferenceKey {
 struct SpaceView: View {
     let space: Space
     let isActive: Bool
+    @Binding var isSidebarHovered: Bool
     @EnvironmentObject var browserManager: BrowserManager
-    @EnvironmentObject var windowState: BrowserWindowState
+    @Environment(BrowserWindowState.self) private var windowState
+    @Environment(CommandPalette.self) private var commandPalette
     @EnvironmentObject var gradientColorManager: GradientColorManager
     @State private var draggedItem: UUID? = nil
     @State private var dropPreviewIndex: Int? = nil
@@ -152,7 +154,9 @@ struct SpaceView: View {
             folderChangeCount += 1
         }
         .onHover { state in
-            isHovered = state
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = state
+            }
         }
       }
     
@@ -275,7 +279,7 @@ struct SpaceView: View {
                         onActivateTab: { onActivateTab($0) }
                     )
                     .environmentObject(browserManager)
-                    .environmentObject(windowState)
+                    .environment(windowState)
                     .transition(.asymmetric(
                         insertion: .scale.combined(with: .opacity).animation(.easeInOut(duration: 0.3)),
                         removal: .scale.combined(with: .opacity).animation(.easeInOut(duration: 0.2))
@@ -430,12 +434,18 @@ struct SpaceView: View {
             Color.clear
                 .frame(height: 4)
                 .overlay(alignment: .center) {
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(AppColors.textSecondary)
-                        .frame(height: isActive ? 3 : 0)
-                        .padding(.horizontal, 8)
-                        .opacity(isActive ? 0.8 : 0)
-                        .animation(.easeInOut(duration: 0.15), value: isActive)
+                    HStack(spacing: 0) {
+                        Circle()
+                            .stroke(gradientColorManager.primaryColor , lineWidth: 2)
+                            .frame(width: isActive ? 8 : 0 , height: isActive ? 8 : 0)
+                            
+                        Rectangle()
+                            .fill(gradientColorManager.primaryColor)
+                            .frame(height: isActive ? 2 : 0)
+                    }
+                    .padding(.horizontal, 8)
+                    .opacity(isActive ? 0.8 : 0)
+                    .animation(.easeInOut(duration: 0.15), value: isActive)
                 }
 
             Color.clear
@@ -476,25 +486,35 @@ struct SpaceView: View {
     }
  
     private var newTabButtonSection: some View {
-        NewTabButton()
-            .padding(.top, 8)
-            .onDrop(
-                of: [.text],
-                delegate: SidebarSectionDropDelegateSimple(
-                    itemsCount: { tabs.count },
-                    draggedItem: $draggedItem,
-                    targetSection: .spaceRegular(space.id),
-                    tabManager: browserManager.tabManager
-                )
+        Button {
+            commandPalette.open()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "plus")
+                Text("New Tab")
+                Spacer()
+            }
+        }
+        .buttonStyle(RectNavButtonStyle())
+        .padding(.top, 8)
+        .onDrop(
+            of: [.text],
+            delegate: SidebarSectionDropDelegateSimple(
+                itemsCount: { tabs.count },
+                draggedItem: $draggedItem,
+                targetSection: .spaceRegular(space.id),
+                tabManager: browserManager.tabManager
             )
+        )
     }
 
     private var newTabButtonSectionWithClear: some View {
         VStack(spacing: 0) {
-            SpaceSeparator(isHovering: isHovered) {
+            SpaceSeparator(isHovering: $isSidebarHovered) {
                 browserManager.tabManager.clearRegularTabs(for: space.id)
             }
             .padding(.horizontal, 8)
+            .padding(.top, 4)
 
             newTabButtonSection
         }
@@ -515,9 +535,10 @@ struct SpaceView: View {
         VStack(spacing: 2) {
             let currentTabs = tabs
             let split = splitManager
+            let windowId = windowState.id
             
-            if split.isSplit,
-               let leftId = split.leftTabId, let rightId = split.rightTabId,
+            if split.isSplit(for: windowId),
+               let leftId = split.leftTabId(for: windowId), let rightId = split.rightTabId(for: windowId),
                let leftIdx = currentTabs.firstIndex(where: { $0.id == leftId }),
                let rightIdx = currentTabs.firstIndex(where: { $0.id == rightId }),
                leftIdx >= 0, rightIdx >= 0,
@@ -535,7 +556,7 @@ struct SpaceView: View {
         }
         .frame(minWidth: 0, maxWidth: innerWidth, alignment: .leading)
         .contentShape(Rectangle())
-        .padding(.top, 8)
+        .padding(.top, 2)
         .onDrop(
             of: [.text],
             delegate: SidebarSectionDropDelegateSimple(
@@ -653,7 +674,7 @@ struct SpaceView: View {
                         .animation(.easeInOut(duration: 0.15), value: isActive)
                 }
         }
-        .padding(.top, 8)
+        .padding(.top, 2)
         .contentShape(Rectangle())
         .onDrop(
             of: [.text],
