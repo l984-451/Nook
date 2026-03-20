@@ -3039,7 +3039,7 @@ final class ExtensionManager: NSObject, ObservableObject,
         _ controller: WKWebExtensionController,
         connectUsing port: WKWebExtension.MessagePort,
         for extensionContext: WKWebExtensionContext
-    ) {
+    ) async throws {
         guard let applicationId = port.applicationIdentifier else {
             Self.logger.error("[NativeMessaging] Port connection missing application identifier")
             return
@@ -3826,7 +3826,7 @@ class NativeMessagingHandler: NSObject {
         // Use closure-based handlers since delegate is not available
         port.messageHandler = { [weak self] (port, message) in
             do {
-                try self?.writeMessage(message)
+                try self?.writeMessage(message as Any)
             } catch {
                 Self.logger.error("[NativeMessaging] Failed to write to host: \(error.localizedDescription, privacy: .public)")
             }

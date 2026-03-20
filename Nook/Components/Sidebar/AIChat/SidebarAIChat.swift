@@ -24,7 +24,7 @@ struct ChatMessage: Identifiable, Equatable {
 }
 
 struct URLCitation: Identifiable, Equatable, Codable {
-    let id = UUID()
+    var id = UUID()
     let url: String
     let title: String?
     let content: String?

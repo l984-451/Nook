@@ -825,6 +825,7 @@ class TabManager: ObservableObject {
 
     // MARK: - Folder Management
 
+    @discardableResult
     func createFolder(for spaceId: UUID, name: String = "New Folder") -> TabFolder {
         print("📁 Creating folder for spaceId: \(spaceId.uuidString)")
         let folder = TabFolder(

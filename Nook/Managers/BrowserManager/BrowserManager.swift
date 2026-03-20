@@ -434,7 +434,6 @@ class BrowserManager: ObservableObject {
     ) {
         guard let coordinator = webViewCoordinator else { return }
         let clones = coordinator.getAllWebViews(for: tab.id)
-        let activeMute = desiredMuteState ?? tab.isAudioMuted
         for webView in clones {
             // Find which window this webView belongs to
             // For now, assume the webView in the active window gets the active mute state

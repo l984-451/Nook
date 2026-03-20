@@ -564,8 +564,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             }
             let ctrl = configuration.webExtensionController
             let ctxs = ctrl?.extensionContexts.count ?? -1
-            let samePool = configuration.processPool === BrowserConfiguration.shared.webViewConfiguration.processPool
-            print("[EXT-CFG] '\(name)' controller=\(ctrl != nil), contexts=\(ctxs), sameProcessPool=\(samePool), existing=\(_existingWebView != nil)")
+            print("[EXT-CFG] '\(name)' controller=\(ctrl != nil), contexts=\(ctxs), existing=\(_existingWebView != nil)")
         }
 
         // Check if we have an existing WebView to inject
@@ -1759,7 +1758,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
                 print("📄 [Tab] KVO title change for \(name): '\(newTitle)'")
                 updateTitle(newTitle)
             }
-        } else if keyPath == "URL", let webView = object as? WKWebView {
+        } else if keyPath == "URL", object is WKWebView {
             // URL observer disabled - was causing restored URLs to be overwritten
             // URL updates are handled by didCommit/didFinish navigation delegates
         } else {

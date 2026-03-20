@@ -87,7 +87,7 @@ final class SplitViewManager: ObservableObject {
 
     /// Keep legacy published properties aligned with the active window's state
     private func syncPublishedStateIfNeeded(for windowId: UUID) {
-        guard let bm = browserManager, windowRegistry?.activeWindow?.id == windowId else { return }
+        guard browserManager != nil, windowRegistry?.activeWindow?.id == windowId else { return }
         updatePublishedState(from: getSplitState(for: windowId))
     }
 
@@ -177,7 +177,7 @@ final class SplitViewManager: ObservableObject {
 
     func cleanupWindow(_ windowId: UUID) {
         windowSplitStates.removeValue(forKey: windowId)
-        if let bm = browserManager, windowRegistry?.activeWindow?.id == windowId {
+        if browserManager != nil, windowRegistry?.activeWindow?.id == windowId {
             updatePublishedState(from: WindowSplitState())
         }
         print("🪟 [SplitViewManager] Cleaned up split state for window \(windowId)")
@@ -348,17 +348,17 @@ final class SplitViewManager: ObservableObject {
     }
 
     func exitSplit(keep side: Side = .left) {
-        guard let bm = browserManager, let activeWindow = windowRegistry?.activeWindow else { return }
+        guard browserManager != nil, let activeWindow = windowRegistry?.activeWindow else { return }
         exitSplit(keep: side, for: activeWindow.id)
     }
 
     func closePane(_ side: Side) {
-        guard let bm = browserManager, let activeWindow = windowRegistry?.activeWindow else { return }
+        guard browserManager != nil, let activeWindow = windowRegistry?.activeWindow else { return }
         closePane(side, for: activeWindow.id)
     }
 
     func swapSides() {
-        guard let bm = browserManager, let activeWindow = windowRegistry?.activeWindow else { return }
+        guard browserManager != nil, let activeWindow = windowRegistry?.activeWindow else { return }
         swapSides(for: activeWindow.id)
     }
     
@@ -391,12 +391,12 @@ final class SplitViewManager: ObservableObject {
 
     // MARK: - Preview during drag-over
     func beginPreview(side: Side) {
-        guard let bm = browserManager, let windowState = windowRegistry?.activeWindow else { return }
+        guard browserManager != nil, let windowState = windowRegistry?.activeWindow else { return }
         beginPreview(side: side, for: windowState.id)
     }
 
     func endPreview(cancel: Bool) {
-        guard let bm = browserManager, let windowState = windowRegistry?.activeWindow else { return }
+        guard browserManager != nil, let windowState = windowRegistry?.activeWindow else { return }
         endPreview(cancel: cancel, for: windowState.id)
     }
 

@@ -75,7 +75,7 @@ final class HoverSidebarManager: ObservableObject {
 
     @MainActor
     private func handleMouseMovementOnMain() {
-        guard let bm = browserManager,
+        guard browserManager != nil,
               let registry = windowRegistry,
               let activeState = registry.activeWindow else { return }
 
