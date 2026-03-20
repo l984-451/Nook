@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UniversalGlass
 
 /// Main window view that orchestrates the browser UI layout
 struct WindowView: View {
@@ -14,6 +15,7 @@ struct WindowView: View {
     @Environment(BrowserWindowState.self) private var windowState
     @Environment(CommandPalette.self) private var commandPalette
     @Environment(WindowRegistry.self) private var windowRegistry
+    @Environment(AIService.self) private var aiService
     @Environment(\.nookSettings) var nookSettings
     @StateObject private var hoverSidebarManager = HoverSidebarManager()
     @Environment(\.colorScheme) var colorScheme
@@ -40,14 +42,11 @@ struct WindowView: View {
 
             // Peek overlay for external link previews
             PeekOverlayView()
-        }
-        // Find bar overlay - centered at top
-        .overlay(alignment: .top) {
-            if browserManager.findManager.isFindBarVisible {
-                FindBarView(findManager: browserManager.findManager)
-                    .frame(maxWidth: 500)
-                    .padding(.top, 20)
-            }
+
+            // Find bar - always rendered (24/7), visibility controlled via opacity
+            FindBarView(findManager: browserManager.findManager)
+                .zIndex(10000)
+
         }
         // System notification toasts - top trailing corner
         .overlay(alignment: .topTrailing) {
@@ -57,37 +56,36 @@ struct WindowView: View {
                    let toast = windowState.profileSwitchToast
                 {
                     ProfileSwitchToastView(toast: toast)
-                        .transition(.scale(scale: 0.0, anchor: .top))
-                        .animation(.spring(response: 0.5, dampingFraction: 0.8), value: windowState.isShowingProfileSwitchToast)
-                        .onTapGesture {
-                            browserManager.hideProfileSwitchToast(for: windowState)
-                        }
+                        .environment(windowState)
+                        .environmentObject(browserManager)
                 }
 
                 // Tab closure toast
                 if browserManager.showTabClosureToast && browserManager.tabClosureToastCount > 0 {
                     TabClosureToast()
                         .environmentObject(browserManager)
-                        .environment(windowState)
-                        .transition(.scale(scale: 0.0, anchor: .top))
-                        .animation(.spring(response: 0.5, dampingFraction: 0.8), value: browserManager.showTabClosureToast)
-                        .onTapGesture {
-                            browserManager.hideTabClosureToast()
-                        }
                 }
-                
+
                 // Copy URL toast
                 if windowState.isShowingCopyURLToast {
                     CopyURLToast()
                         .environment(windowState)
-                        .transition(.scale(scale: 0.0, anchor: .top))
-                        .animation(.spring(response: 0.5, dampingFraction: 0.8), value: windowState.isShowingCopyURLToast)
-                        .onTapGesture {
-                            windowState.isShowingCopyURLToast = false
-                        }
+                }
+                
+                // Shortcut conflict toast
+                if windowState.isShowingShortcutConflictToast,
+                   let conflictInfo = windowState.shortcutConflictInfo
+                {
+                    ShortcutConflictToast(conflictInfo: conflictInfo)
+                        .environment(windowState)
                 }
             }
             .padding(10)
+            // Animate toast insertions/removals
+            .animation(.smooth(duration: 0.25), value: windowState.isShowingProfileSwitchToast)
+            .animation(.smooth(duration: 0.25), value: browserManager.showTabClosureToast)
+            .animation(.smooth(duration: 0.25), value: windowState.isShowingCopyURLToast)
+            .animation(.smooth(duration: 0.25), value: windowState.isShowingShortcutConflictToast)
         }
         // Zoom control popup - separate from system toasts
         .overlay(alignment: .topTrailing) {
@@ -117,6 +115,28 @@ struct WindowView: View {
         }
         .onDisappear {
             hoverSidebarManager.stop()
+        }
+        // Handle shortcut conflict notifications
+        .onReceive(NotificationCenter.default.publisher(for: .shortcutConflictDetected)) { notification in
+            if let conflictInfo = notification.userInfo?["conflictInfo"] as? ShortcutConflictInfo,
+               conflictInfo.windowId == windowState.id {
+                windowState.shortcutConflictInfo = conflictInfo
+                windowState.isShowingShortcutConflictToast = true
+                
+                // Auto-dismiss after 1.5 seconds (slightly longer than the 1s timeout)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    if windowState.shortcutConflictInfo?.timestamp == conflictInfo.timestamp {
+                        windowState.isShowingShortcutConflictToast = false
+                    }
+                }
+            }
+        }
+        // Handle shortcut conflict dismissal
+        .onReceive(NotificationCenter.default.publisher(for: .shortcutConflictDismissed)) { notification in
+            if let windowId = notification.userInfo?["windowId"] as? UUID,
+               windowId == windowState.id {
+                windowState.isShowingShortcutConflictToast = false
+            }
         }
         .environmentObject(browserManager)
         .environmentObject(browserManager.gradientColorManager)
@@ -242,6 +262,13 @@ struct WindowView: View {
                 .zIndex(-1)
             }
         }
+        .overlay {
+            if aiService.isExecutingTools {
+                ToolExecutionGlowView()
+                    .transition(.opacity.animation(.easeInOut(duration: 0.3)))
+                    .allowsHitTesting(false)
+            }
+        }
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -285,31 +312,37 @@ struct WindowView: View {
 // MARK: - Profile Switch Toast View
 private struct ProfileSwitchToastView: View {
     let toast: BrowserManager.ProfileSwitchToast
-    
+    @Environment(BrowserWindowState.self) private var windowState
+    @EnvironmentObject var browserManager: BrowserManager
+
     var body: some View {
-        HStack {
-            Text("Switched to \(toast.toProfile.name)")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white)
-            Image(systemName: "person.crop.circle")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white)
-                .frame(width: 14, height: 14)
-                .padding(4)
-                .background(Color.white.opacity(0.2))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(.white.opacity(0.4), lineWidth: 1)
-                }
+        ToastView {
+            HStack {
+                Text("Switched to \(toast.toProfile.name)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white)
+                Image(systemName: "person.crop.circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 14, height: 14)
+                    .padding(4)
+                    .background(Color.white.opacity(0.2))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(.white.opacity(0.4), lineWidth: 1)
+                    }
+            }
         }
-        .padding(12)
-        .background(Color(hex: "3E4D2E"))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(.white.opacity(0.2), lineWidth: 2)
+        .transition(.toast)
+        .onAppear {
+            // Auto-dismiss after 2 seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                browserManager.hideProfileSwitchToast(for: windowState)
+            }
         }
-        .transition(.scale(scale: 0.0, anchor: .top))
+        .onTapGesture {
+            browserManager.hideProfileSwitchToast(for: windowState)
+        }
     }
 }

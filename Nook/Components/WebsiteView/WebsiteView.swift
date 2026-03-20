@@ -220,7 +220,7 @@ struct WebsiteView: View {
                         .shadow(color: Color.black.opacity(0.3), radius: 4, x: 0, y: 0)
                         // Critical: Use allowsHitTesting to prevent SwiftUI from intercepting mouse events
                         // This allows right-clicks to pass through to the underlying NSView (WKWebView)
-                        .allowsHitTesting(true)
+                        .allowsHitTesting(!browserManager.dialogManager.isVisible)
                         .contentShape(Rectangle())
                     }
                     // Removed SwiftUI contextMenu - it intercepts ALL right-clicks
@@ -232,18 +232,17 @@ struct WebsiteView: View {
             VStack {
                 HStack {
                     Spacer()
-                    if browserManager.didCopyURL {
-                        WebsitePopup()
-                            .animation(.spring(response: 0.5, dampingFraction: 0.8), value: browserManager.didCopyURL)
-                            .padding(10)
+                    Group {
+                        if let assist = browserManager.oauthAssist,
+                           browserManager.currentTab(for: windowState)?.id == assist.tabId {
+                            OAuthAssistBanner(host: assist.host)
+                                .environmentObject(browserManager)
+                                .environment(windowState)
+                                .padding(10)
+                        }
                     }
-                    if let assist = browserManager.oauthAssist,
-                       browserManager.currentTab(for: windowState)?.id == assist.tabId {
-                        OAuthAssistBanner(host: assist.host)
-                            .environmentObject(browserManager)
-                            .animation(.spring(response: 0.5, dampingFraction: 0.8), value: browserManager.oauthAssist)
-                            .padding(10)
-                    }
+                    // Animate toast insertions/removals
+                    .animation(.smooth(duration: 0.25), value: browserManager.oauthAssist != nil)
                 }
                 Spacer()
                 if nookSettings.showLinkStatusBar {
@@ -489,15 +488,17 @@ struct TabCompositorWrapper: NSViewRepresentable {
 
         // Observe size changes to recompute pane layout when available width changes
         let coord = context.coordinator
+        // MEMORY LEAK FIX: Capture coord weakly to break potential retain cycle
+        // Coordinator → frameObserver token → closure → Coordinator
         coord.frameObserver = NotificationCenter.default.addObserver(
             forName: NSView.frameDidChangeNotification,
             object: containerView,
             queue: .main
-        ) { [weak containerView] _ in
+        ) { [weak containerView, weak coord] _ in
             guard let cv = containerView else { return }
             // Rebuild compositor to anchor left/right panes to new bounds
             updateCompositor(cv)
-            coord.lastSize = cv.bounds.size
+            coord?.lastSize = cv.bounds.size
         }
 
         // Set up link hover callbacks for current tab
@@ -523,6 +524,7 @@ struct TabCompositorWrapper: NSViewRepresentable {
             context.coordinator.lastVersion != compositorVersion
 
         if needsRebuild {
+            let previousCurrentId = context.coordinator.lastCurrentId
             updateCompositor(nsView)
             context.coordinator.lastIsSplit = isSplit
             context.coordinator.lastLeftId = leftId
@@ -531,6 +533,27 @@ struct TabCompositorWrapper: NSViewRepresentable {
             context.coordinator.lastFraction = splitFraction
             context.coordinator.lastSize = size
             context.coordinator.lastVersion = compositorVersion
+
+            // Restore focus when tab changed (webview is now in hierarchy)
+            if previousCurrentId != currentId {
+                DispatchQueue.main.async {
+                    guard let window = nsView.window else { return }
+                    for subview in nsView.subviews.reversed() {
+                        if subview is SplitDropCaptureView { continue }
+                        if let webView = subview as? WKWebView, !webView.isHidden {
+                            window.makeFirstResponder(webView)
+                            return
+                        }
+                        // Check pane containers (split view)
+                        for child in subview.subviews {
+                            if let webView = child as? WKWebView, !child.isHidden {
+                                window.makeFirstResponder(webView)
+                                return
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         // Mark current tab as accessed (resets unload timer)
@@ -545,14 +568,22 @@ struct TabCompositorWrapper: NSViewRepresentable {
     }
 
     private func updateCompositor(_ containerView: NSView) {
+        print("🔍 [MEMDEBUG] updateCompositor() CALLED - Window: \(windowState.id.uuidString.prefix(8)), Size: \(containerView.bounds.size)")
+        
         // Remove all existing webview subviews
         // Preserve the last overlay subview if present, then re-add
         let overlay = containerView.subviews.compactMap { $0 as? SplitDropCaptureView }.first
+        let existingSubviews = containerView.subviews.count
+        print("🔍 [MEMDEBUG]   Removing \(existingSubviews) existing subviews")
         containerView.subviews.forEach { $0.removeFromSuperview() }
         
         // Add tabs that should be displayed in this window. If split view is active, show two panes;
         // otherwise show only the current tab.
         let allTabs = browserManager.tabsForDisplay(in: windowState)
+        print("🔍 [MEMDEBUG]   Processing \(allTabs.count) tabs for display")
+        for tab in allTabs {
+            print("🔍 [MEMDEBUG]     Tab: \(tab.id.uuidString.prefix(8)), Name: \(tab.name), isUnloaded: \(tab.isUnloaded)")
+        }
         
         let split = browserManager.splitManager
         let splitState = split.getSplitState(for: windowState.id)
@@ -669,6 +700,11 @@ struct TabCompositorWrapper: NSViewRepresentable {
             newOverlay.layer?.zPosition = 10_000
             containerView.addSubview(newOverlay)
         }
+        
+        // Log final state
+        let webViewCount = containerView.subviews.filter { $0 is WKWebView }.count
+        let totalSubviews = containerView.subviews.count
+        print("🔍 [MEMDEBUG] updateCompositor() COMPLETE - Window: \(windowState.id.uuidString.prefix(8)), WebViews in container: \(webViewCount), Total subviews: \(totalSubviews)")
     }
 
     private func makePaneContainer(frame: NSRect, isActive: Bool, accent: NSColor, side: SplitViewManager.Side) -> NSView {
@@ -774,9 +810,19 @@ struct TabCompositorWrapper: NSViewRepresentable {
     }
 
     private func webView(for tab: Tab, windowId: UUID) -> WKWebView {
-        if let existing = browserManager.getWebView(for: tab.id, in: windowId) {
-            return existing
+        print("🔍 [MEMDEBUG] WebsiteView.webView() REQUESTED - Tab: \(tab.id.uuidString.prefix(8)), Name: \(tab.name), Window: \(windowId.uuidString.prefix(8))")
+        print("🔍 [MEMDEBUG]   tab.isUnloaded: \(tab.isUnloaded), tab.assignedWebView exists: \(tab.assignedWebView != nil), primaryWindowId: \(tab.primaryWindowId?.uuidString.prefix(8) ?? "nil")")
+        
+        // Use the new smart WebView assignment system
+        // This ensures only ONE WebView per tab in single-window mode
+        if let coordinator = browserManager.webViewCoordinator {
+            let webView = coordinator.getOrCreateWebView(for: tab, in: windowId, tabManager: browserManager.tabManager)
+            print("🔍 [MEMDEBUG]   -> Got WebView via smart assignment: \(Unmanaged.passUnretained(webView).toOpaque())")
+            return webView
         }
+        
+        // Fallback to old behavior (should never happen)
+        print("⚠️ [MEMDEBUG] WARNING: No WebViewCoordinator found, using fallback!")
         return browserManager.createWebView(for: tab.id, in: windowId)
     }
 
@@ -798,7 +844,13 @@ private extension WebsiteView {
 private class ContainerView: NSView {
     // Don't intercept events - let them pass through to webviews
     override var acceptsFirstResponder: Bool { false }
-    
+
+    override func resetCursorRects() {
+        // Empty: prevents NSHostingView and other ancestors from registering
+        // arrow cursor rects over the webview. WKWebView uses NSCursor.set()
+        // internally, which works correctly when cursor rects don't override it.
+    }
+
     // Forward right-clicks to the webview below so context menus work
     override func rightMouseDown(with event: NSEvent) {
         print("🔽 [ContainerView] rightMouseDown received, forwarding to webview")

@@ -9,6 +9,7 @@
 import AppKit
 import SwiftUI
 
+
 @MainActor
 @Observable
 class NookSettingsService {
@@ -21,7 +22,7 @@ class NookSettingsService {
     private let askBeforeQuitKey = "settings.askBeforeQuit"
     private let sidebarPositionKey = "settings.sidebarPosition"
     private let topBarAddressViewKey = "settings.topBarAddressView"
-    private let experimentalExtensionsKey = "settings.experimentalExtensions"
+
     private let geminiApiKeyKey = "settings.geminiApiKey"
     private let geminiModelKey = "settings.geminiModel"
     private let showAIAssistantKey = "settings.showAIAssistant"
@@ -36,7 +37,11 @@ class NookSettingsService {
     private let webSearchContextSizeKey = "settings.webSearchContextSize"
     private let showLinkStatusBarKey = "settings.showLinkStatusBar"
     private let pinnedTabsLookKey = "settings.pinnedTabsLook"
-    
+    private let siteSearchEntriesKey = "settings.siteSearchEntries"
+    private let didFinishOnboardingKey = "settings.didFinishOnboarding"
+    private let tabLayoutKey = "settings.tabLayout"
+    private let customSearchEnginesKey = "settings.customSearchEngines"
+
     var currentSettingsTab: SettingsTabs = .general
 
     var currentMaterialRaw: Int {
@@ -53,10 +58,30 @@ class NookSettingsService {
         set { currentMaterialRaw = newValue.rawValue }
     }
 
-    var searchEngine: SearchProvider {
+    var searchEngineId: String {
         didSet {
-            userDefaults.set(searchEngine.rawValue, forKey: searchEngineKey)
+            userDefaults.set(searchEngineId, forKey: searchEngineKey)
         }
+    }
+
+    var customSearchEngines: [CustomSearchEngine] {
+        didSet {
+            if let data = try? JSONEncoder().encode(customSearchEngines) {
+                userDefaults.set(data, forKey: customSearchEnginesKey)
+            }
+        }
+    }
+
+    /// Resolves the current `searchEngineId` to a query template string.
+    /// Checks built-in `SearchProvider` cases first, then custom engines.
+    var resolvedSearchEngineTemplate: String {
+        if let provider = SearchProvider(rawValue: searchEngineId) {
+            return provider.queryTemplate
+        }
+        if let custom = customSearchEngines.first(where: { $0.id.uuidString == searchEngineId }) {
+            return custom.urlTemplate
+        }
+        return SearchProvider.google.queryTemplate
     }
     
     var tabUnloadTimeout: TimeInterval {
@@ -98,11 +123,6 @@ class NookSettingsService {
         }
     }
 
-    var experimentalExtensions: Bool {
-        didSet {
-            userDefaults.set(experimentalExtensions, forKey: experimentalExtensionsKey)
-        }
-    }
 
     var geminiApiKey: String {
         didSet {
@@ -188,6 +208,30 @@ class NookSettingsService {
         }
     }
 
+    var siteSearchEntries: [SiteSearchEntry] {
+        didSet {
+            if let data = try? JSONEncoder().encode(siteSearchEntries) {
+                userDefaults.set(data, forKey: siteSearchEntriesKey)
+            }
+        }
+    }
+    
+    var tabLayout: TabLayout {
+        didSet {
+            userDefaults.set(tabLayout.rawValue, forKey: tabLayoutKey)
+            // When tabs are on top, URL bar can't be in the sidebar
+            if tabLayout == .topOfWindow && !topBarAddressView {
+                topBarAddressView = true
+            }
+        }
+    }
+
+    var didFinishOnboarding: Bool {
+        didSet {
+            userDefaults.set(didFinishOnboarding, forKey: didFinishOnboardingKey)
+        }
+    }
+
     init() {
         // Register default values
         userDefaults.register(defaults: [
@@ -200,7 +244,7 @@ class NookSettingsService {
             askBeforeQuitKey: true,
             sidebarPositionKey: SidebarPosition.left.rawValue,
             topBarAddressViewKey: false,
-            experimentalExtensionsKey: false,
+
             geminiApiKeyKey: "",
             geminiModelKey: GeminiModel.flash.rawValue,
             showAIAssistantKey: true,
@@ -215,20 +259,22 @@ class NookSettingsService {
             webSearchContextSizeKey: "medium",
             showLinkStatusBarKey: true,
             pinnedTabsLookKey: "large",
-            
+            didFinishOnboardingKey: false,
+            tabLayoutKey: TabLayout.sidebar.rawValue,
         ])
 
         // Initialize properties from UserDefaults
         // This will use the registered defaults if no value is set
         self.currentMaterialRaw = userDefaults.integer(forKey: materialKey)
 
-        if let rawEngine = userDefaults.string(forKey: searchEngineKey),
-           let provider = SearchProvider(rawValue: rawEngine)
-        {
-            self.searchEngine = provider
+        // searchEngineId: backward compatible — existing "google" string still works
+        self.searchEngineId = userDefaults.string(forKey: searchEngineKey) ?? SearchProvider.google.rawValue
+
+        if let ceData = userDefaults.data(forKey: customSearchEnginesKey),
+           let decoded = try? JSONDecoder().decode([CustomSearchEngine].self, from: ceData) {
+            self.customSearchEngines = decoded
         } else {
-            // Fallback to google if the stored value is somehow invalid
-            self.searchEngine = .google
+            self.customSearchEngines = []
         }
         
         // Initialize tab unload timeout
@@ -238,11 +284,6 @@ class NookSettingsService {
         self.askBeforeQuit = userDefaults.bool(forKey: askBeforeQuitKey)
         self.sidebarPosition = SidebarPosition(rawValue: userDefaults.string(forKey: sidebarPositionKey) ?? "left") ?? SidebarPosition.left
         self.topBarAddressView = userDefaults.bool(forKey: topBarAddressViewKey)
-        // DISABLED: Force disable experimental extensions (feature temporarily disabled)
-        // Override any stored value to prevent issues for users who had it enabled
-        self.experimentalExtensions = false
-        // Clear the stored value to prevent confusion
-        userDefaults.set(false, forKey: experimentalExtensionsKey)
         self.geminiApiKey = userDefaults.string(forKey: geminiApiKeyKey) ?? ""
         self.geminiModel = GeminiModel(rawValue: userDefaults.string(forKey: geminiModelKey) ?? GeminiModel.flash.rawValue) ?? .flash
         self.showAIAssistant = userDefaults.bool(forKey: showAIAssistantKey)
@@ -256,7 +297,17 @@ class NookSettingsService {
         self.webSearchMaxResults = userDefaults.integer(forKey: webSearchMaxResultsKey)
         self.webSearchContextSize = userDefaults.string(forKey: webSearchContextSizeKey) ?? "medium"
         self.showLinkStatusBar = userDefaults.bool(forKey: showLinkStatusBarKey)
-        self.pinnedTabsLook = PinnedTabsConfiguration(rawValue: userDefaults.string(forKey: pinnedTabsLookKey) ?? "large") ?? .large }
+        self.pinnedTabsLook = PinnedTabsConfiguration(rawValue: userDefaults.string(forKey: pinnedTabsLookKey) ?? "large") ?? .large
+        self.tabLayout = TabLayout(rawValue: userDefaults.string(forKey: tabLayoutKey) ?? TabLayout.sidebar.rawValue) ?? .sidebar
+        self.didFinishOnboarding = userDefaults.bool(forKey: didFinishOnboardingKey)
+
+        if let data = userDefaults.data(forKey: siteSearchEntriesKey),
+           let decoded = try? JSONDecoder().decode([SiteSearchEntry].self, from: data) {
+            self.siteSearchEntries = decoded
+        } else {
+            self.siteSearchEntries = SiteSearchEntry.defaultSites
+        }
+    }
 }
 
 // MARK: - AI Provider
@@ -390,4 +441,20 @@ public let materials: [(name: String, value: NSVisualEffectView.Material)] = [
 public func nameForMaterial(_ material: NSVisualEffectView.Material) -> String {
     materials.first(where: { $0.value == material })?.name
         ?? "raw(\(material.rawValue))"
+}
+
+// MARK: - Tab Layout
+
+public enum TabLayout: String, CaseIterable, Identifiable {
+    case sidebar
+    case topOfWindow
+
+    public var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .sidebar: return "Sidebar"
+        case .topOfWindow: return "Top of Window"
+        }
+    }
 }

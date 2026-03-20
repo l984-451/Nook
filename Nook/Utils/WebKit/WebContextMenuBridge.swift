@@ -18,8 +18,10 @@ final class WebContextMenuBridge: NSObject, WKScriptMessageHandler {
         self.userContentController = controller
         super.init()
 
+        debugLog("🔽 [WebContextMenuBridge] Initializing bridge for tab: \(tab.id)")
         controller.add(self, name: Self.handlerName)
         controller.addUserScript(Self.script)
+        debugLog("🔽 [WebContextMenuBridge] Added message handler and user script")
     }
 
     func detach() {
@@ -29,25 +31,31 @@ final class WebContextMenuBridge: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == Self.handlerName else { return }
+        debugLog("🔽 [WebContextMenuBridge] Received message from JavaScript")
         guard let dictionary = message.body as? [String: Any] else {
+            debugLog("🔽 [WebContextMenuBridge] Failed to cast message.body as dictionary")
             tab?.deliverContextMenuPayload(nil)
             return
         }
+        debugLog("🔽 [WebContextMenuBridge] Dictionary: \(dictionary)")
         let payload = WebContextMenuPayload(dictionary: dictionary)
+        debugLog("🔽 [WebContextMenuBridge] Created payload: \(String(describing: payload))")
         tab?.deliverContextMenuPayload(payload)
     }
 
-    private static let handlerName = "contextMenuPayload"
-    private static let script: WKUserScript = WKUserScript(
-        source: WebContextMenuBridge.scriptSource,
-        injectionTime: .atDocumentStart,
-        forMainFrameOnly: false
-    )
+    /// Logs debug messages only in DEBUG builds
+    private func debugLog(_ message: String) {
+        #if DEBUG
+        print(message)
+        #endif
+    }
 
+    private static let handlerName = "contextMenuPayload"
     private static let scriptSource: String = """
     (function() {
         if (window.__nookContextMenuBridgeInstalled) { return; }
         window.__nookContextMenuBridgeInstalled = true;
+        console.log('[Nook Context Menu] Bridge script installed');
 
         const INVOCATIONS = {
             page: 1 << 0,
@@ -63,6 +71,7 @@ final class WebContextMenuBridge: NSObject, WKScriptMessageHandler {
         }
 
         function capturePayload(event) {
+            console.log('[Nook Context Menu] capturePayload called');
             try {
                 var invocations = 0;
                 var params = {};
@@ -103,15 +112,28 @@ final class WebContextMenuBridge: NSObject, WKScriptMessageHandler {
                     href: sanitizeURL(document.location.href)
                 };
 
+                console.log('[Nook Context Menu] Payload prepared:', JSON.stringify(payload));
+                
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.contextMenuPayload) {
+                    console.log('[Nook Context Menu] Posting message to native');
                     window.webkit.messageHandlers.contextMenuPayload.postMessage(payload);
+                } else {
+                    console.error('[Nook Context Menu] messageHandler not available!');
                 }
             } catch (error) {
-                console.error('Context menu payload error', error);
+                console.error('[Nook Context Menu] Context menu payload error', error);
             }
         }
 
         document.addEventListener('contextmenu', capturePayload, true);
+        console.log('[Nook Context Menu] Event listener registered');
     })();
     """
+    private static var script: WKUserScript {
+        WKUserScript(
+            source: scriptSource,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        )
+    }
 }

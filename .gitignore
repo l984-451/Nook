@@ -6,12 +6,17 @@ sessions-config.json
 Nook/.claude
 .crush
 /sessions
+AGENTS.md
+.xcodebuildmcp/
+package.json
+package-lock.json
+.opencode/
 
 ## User settings
 xcuserdata/
 
 # Xcode nonsense
-# *.pbxproj
+ *.pbxproj
 # macOS garbage
 .DS_Store
 
@@ -43,6 +48,8 @@ DerivedData/
 ## Playgrounds
 'timeline.xctimeline'
 playground.xcworkspace
+*.playground
+UIPlayground/
 
 # Swift Package Manager
 #

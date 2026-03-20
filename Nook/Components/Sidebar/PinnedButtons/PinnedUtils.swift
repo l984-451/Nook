@@ -8,8 +8,6 @@
 import SwiftUI
 
 
-
-// Enum for customizing pinned tabs look
 enum PinnedTabsConfiguration: String, CaseIterable, Identifiable {
     case large = "large"
     case small = "small"
@@ -19,7 +17,7 @@ enum PinnedTabsConfiguration: String, CaseIterable, Identifiable {
     var faviconHeight: CGFloat {
         switch self {
         case .large:
-            return 16
+            return 20
         case .small:
             return 16
         }
@@ -70,14 +68,7 @@ enum PinnedTabsConfiguration: String, CaseIterable, Identifiable {
         }
     }
     
-    var gridSpacing: CGFloat {
-        switch self {
-        case .large:
-            return 7
-        case .small:
-            return 8
-        }
-    }
+    var gridSpacing: CGFloat { 7 }
     
     var maxColumns: Int {
         switch self {

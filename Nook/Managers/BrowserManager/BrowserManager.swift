@@ -365,7 +365,6 @@ class BrowserManager: ObservableObject {
     @Published var sidebarContentWidth: CGFloat = 234
     @Published var isSidebarVisible: Bool = true
     @Published var isCommandPaletteVisible: Bool = false
-    @Published var didCopyURL: Bool = false
     // Frame of the URL bar within the window; used to anchor the mini palette precisely
     @Published var urlBarFrame: CGRect = .zero
     @Published var shouldShowZoomPopup: Bool = false
@@ -407,7 +406,10 @@ class BrowserManager: ObservableObject {
     var importManager: ImportManager
     var zoomManager = ZoomManager()
     var boostsManager = BoostsManager()
+    var keyboardShortcutManager: KeyboardShortcutManager?
     weak var nookSettings: NookSettingsService?
+    weak var aiService: AIService?
+    weak var aiConfigService: AIConfigService?
 
     var externalMiniWindowManager = ExternalMiniWindowManager()
     @Published var peekManager = PeekManager()
@@ -448,6 +450,8 @@ class BrowserManager: ObservableObject {
     private func updateGradient(
         for windowState: BrowserWindowState, to newGradient: SpaceGradient, animate: Bool
     ) {
+        // Skip gradient updates for incognito windows - they use their own dark gradient
+        guard !windowState.isIncognito else { return }
         // Only animate if this is the active window (to avoid animating all windows simultaneously)
         let isActiveWindow = windowRegistry?.activeWindow?.id == windowState.id
         if animate && isActiveWindow {
@@ -462,8 +466,10 @@ class BrowserManager: ObservableObject {
         guard let windowRegistry = windowRegistry else { return }
         let activeWindowId = windowRegistry.activeWindow?.id
         
-        // Update gradients for all windows using this space
+        // Update gradients for all windows using this space (skip incognito)
         for (_, windowState) in windowRegistry.windows {
+            // Skip incognito windows
+            guard !windowState.isIncognito else { continue }
             if windowState.currentSpaceId == space.id {
                 let isActiveWindow = windowState.id == activeWindowId
                 if animate && isActiveWindow {
@@ -660,7 +666,7 @@ class BrowserManager: ObservableObject {
         // Respect per-domain allow list
         guard !trackingProtectionManager.isDomainAllowed(host) else { return }
         // Simple heuristic for OAuth endpoints
-        if isLikelyOAuthURL(url) {
+        if OAuthDetector.isLikelyOAuthURL(url) {
             let now = Date()
             if let coolUntil = oauthAssistCooldown[host], coolUntil > now { return }
             oauthAssist = OAuthAssist(host: host, url: url, tabId: tab.id, timestamp: now)
@@ -688,30 +694,11 @@ class BrowserManager: ObservableObject {
         hideOAuthAssist()
     }
 
-    private func isLikelyOAuthURL(_ url: URL) -> Bool {
-        let host = (url.host ?? "").lowercased()
-        let path = url.path.lowercased()
-        let query = url.query?.lowercased() ?? ""
-        // Common IdP hosts
-        let hostHints = [
-            "accounts.google.com", "login.microsoftonline.com", "login.live.com",
-            "appleid.apple.com", "github.com", "gitlab.com", "bitbucket.org",
-            "auth0.com", "okta.com", "onelogin.com", "pingidentity.com",
-            "slack.com", "zoom.us", "login.cloudflareaccess.com",
-        ]
-        if hostHints.contains(where: { host.contains($0) }) { return true }
-        // Common OAuth paths and signals
-        if path.contains("/oauth") || path.contains("oauth2") || path.contains("/authorize")
-            || path.contains("/signin") || path.contains("/login") || path.contains("/callback")
-        {
-            return true
-        }
-        if query.contains("client_id=") || query.contains("redirect_uri=")
-            || query.contains("response_type=")
-        {
-            return true
-        }
-        return false
+    /// Automatically allows an OAuth provider domain for tracking protection
+    func oauthAllowDomain(_ host: String) {
+        let normalizedHost = host.lowercased()
+        print("🔐 [BrowserManager] Auto-allowing OAuth provider domain: \(normalizedHost)")
+        trackingProtectionManager.allowDomain(normalizedHost, allowed: true)
     }
 
     // MARK: - Profile Switching
@@ -787,8 +774,8 @@ class BrowserManager: ObservableObject {
             }
 
             if animateTransition {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    self.isTransitioningProfile = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                    self?.isTransitioningProfile = false
                 }
             }
         }
@@ -903,7 +890,22 @@ class BrowserManager: ObservableObject {
     }
 
     /// Create a new tab and set it as active in the specified window
-    func createNewTab(in windowState: BrowserWindowState) {
+    func createNewTab(in windowState: BrowserWindowState, url: String = "https://www.google.com") {
+        // Handle incognito windows - create ephemeral tabs
+        if windowState.isIncognito, let profile = windowState.ephemeralProfile {
+            let template = nookSettings?.resolvedSearchEngineTemplate ?? SearchProvider.google.queryTemplate
+            let normalizedURL = normalizeURL(url, queryTemplate: template)
+            guard let resolvedUrl = URL(string: normalizedURL) else { return }
+
+            let newTab = tabManager.createEphemeralTab(
+                url: resolvedUrl,
+                in: windowState,
+                profile: profile
+            )
+            selectTab(newTab, in: windowState)
+            return
+        }
+
         let targetSpace =
             windowState.currentSpaceId.flatMap { id in
                 tabManager.spaces.first(where: { $0.id == id })
@@ -911,7 +913,7 @@ class BrowserManager: ObservableObject {
             ?? windowState.currentProfileId.flatMap { pid in
                 tabManager.spaces.first(where: { $0.profileId == pid })
             }
-        let newTab = tabManager.createNewTab(in: targetSpace)
+        let newTab = tabManager.createNewTab(url: url, in: targetSpace)
         selectTab(newTab, in: windowState)
     }
 
@@ -973,7 +975,33 @@ class BrowserManager: ObservableObject {
         if let activeWindow = windowRegistry?.activeWindow,
             let currentTab = currentTab(for: activeWindow)
         {
-            tabManager.removeTab(currentTab.id)
+            // Handle ephemeral tabs in incognito windows
+            if activeWindow.isIncognito {
+                // Clean up WebView
+                currentTab.performComprehensiveWebViewCleanup()
+                
+                // Remove from ephemeral tabs
+                if let index = activeWindow.ephemeralTabs.firstIndex(where: { $0.id == currentTab.id }) {
+                    activeWindow.ephemeralTabs.remove(at: index)
+                    
+                    // Select another tab or create new one
+                    if let nextTab = activeWindow.ephemeralTabs.first {
+                        selectTab(nextTab, in: activeWindow)
+                    } else {
+                        // All tabs closed - create a new ephemeral tab
+                        if let profile = activeWindow.ephemeralProfile {
+                            let template = nookSettings?.resolvedSearchEngineTemplate ?? SearchProvider.google.queryTemplate
+                            let normalizedURL = normalizeURL("https://www.google.com", queryTemplate: template)
+                            if let url = URL(string: normalizedURL) {
+                                let newTab = tabManager.createEphemeralTab(url: url, in: activeWindow, profile: profile)
+                                selectTab(newTab, in: activeWindow)
+                            }
+                        }
+                    }
+                }
+            } else {
+                tabManager.removeTab(currentTab.id)
+            }
         } else {
             // Fallback to global current tab for backward compatibility
             tabManager.closeActiveTab()
@@ -1451,13 +1479,12 @@ class BrowserManager: ObservableObject {
                 print("Clipboard operation success: \(success)")
             }
 
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                self.didCopyURL = true
-            }
+            // Show toast on active window
+            if let windowState = windowRegistry?.activeWindow {
+                windowState.isShowingCopyURLToast = true
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                    self.didCopyURL = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    windowState.isShowingCopyURLToast = false
                 }
             }
         } else {
@@ -1467,58 +1494,34 @@ class BrowserManager: ObservableObject {
 
     // MARK: - Web Inspector
     func openWebInspector() {
-        guard let currentTab = currentTabForActiveWindow(),
-            let activeWindowId = windowRegistry?.activeWindow?.id
-        else {
+        guard let currentTab = currentTabForActiveWindow() else {
             print("No current tab to inspect")
             return
         }
 
         if #available(macOS 13.3, *) {
-            // Use the WebView that's actually visible in the current window
-            let webView: WKWebView
-            if let windowWebView = getWebView(for: currentTab.id, in: activeWindowId) {
-                webView = windowWebView
-            } else {
-                webView = currentTab.activeWebView
+            let webView = currentTab.activeWebView
+
+            // Ensure the webview is inspectable (macOS 16+)
+            if #available(macOS 16.0, *) {
+                webView.isInspectable = true
             }
 
-            if webView.isInspectable {
-                DispatchQueue.main.async {
-                    // Focus the webview and trigger context menu programmatically
-                    self.presentInspectorContextMenu(for: webView)
-                }
-            } else {
-                print("Web inspector not available for this tab")
-            }
+            // There is no public API to programmatically open the Web Inspector
+            // Show an alert instructing the user how to open it manually
+            showWebInspectorAlert()
         } else {
             print("Web inspector requires macOS 13.3 or later")
         }
     }
 
-    private func presentInspectorContextMenu(for webView: WKWebView) {
-        // Focus the webview first
-        webView.window?.makeFirstResponder(webView)
-
-        // Create a right-click event at the center of the webview
-        let bounds = webView.bounds
-        let center = NSPoint(x: bounds.midX, y: bounds.midY)
-
-        let rightClickEvent = NSEvent.mouseEvent(
-            with: .rightMouseDown,
-            location: center,
-            modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: webView.window?.windowNumber ?? 0,
-            context: nil,
-            eventNumber: 0,
-            clickCount: 1,
-            pressure: 1.0
-        )
-
-        if let event = rightClickEvent {
-            webView.rightMouseDown(with: event)
-        }
+    private func showWebInspectorAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Open Web Inspector"
+        alert.informativeText = "To open the Web Inspector:\n\n1. Right-click on the page and select 'Inspect Element'\n\nOr enable the Develop menu in Safari Settings → Advanced, then use Develop → [Your App]"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     // MARK: - Profile Switch Toast
@@ -1888,7 +1891,6 @@ class BrowserManager: ObservableObject {
         windowState.isSidebarVisible = isSidebarVisible
         windowState.savedSidebarWidth = savedSidebarWidth
         windowState.isCommandPaletteVisible = false
-        windowState.didCopyURL = false
 
         // Set the NSWindow reference for keyboard shortcuts
         if let window = NSApplication.shared.windows.first(where: {
@@ -1931,25 +1933,27 @@ class BrowserManager: ObservableObject {
         sidebarContentWidth = windowState.sidebarContentWidth
         isSidebarVisible = windowState.isSidebarVisible
         urlBarFrame = windowState.urlBarFrame
-        gradientColorManager.setImmediate(windowState.gradient)
+        // Skip gradient sync for incognito windows - they use their own dark gradient
+        if !windowState.isIncognito {
+            gradientColorManager.setImmediate(windowState.gradient)
+        }
         splitManager.refreshPublishedState(for: windowState.id)
         isCommandPaletteVisible = windowState.isCommandPaletteVisible
         if windowState.currentProfileId == nil {
             windowState.currentProfileId = currentProfile?.id
         }
         adoptProfileIfNeeded(for: windowState, context: .windowActivation)
-        // DISABLED: Exclusive audio enforcement - use standard browser behavior instead
-        // if let currentId = windowState.currentTabId,
-        //     let tab = tabManager.allTabs().first(where: { $0.id == currentId })
-        // {
-        //     enforceExclusiveAudio(for: tab, activeWindowId: windowState.id)
-        // }
     }
 
     // MARK: - Window-Aware Tab Operations
 
     /// Get the current tab for a specific window
     func currentTab(for windowState: BrowserWindowState) -> Tab? {
+        // Check ephemeral tabs first for incognito windows
+        if windowState.isIncognito {
+            return windowState.ephemeralTabs.first { $0.id == windowState.currentTabId }
+        }
+        
         guard let tabId = windowState.currentTabId else { return nil }
         return tabManager.allTabs().first { $0.id == tabId }
     }
@@ -2026,6 +2030,11 @@ class BrowserManager: ObservableObject {
 
     /// Get tabs that should be displayed in a specific window
     func tabsForDisplay(in windowState: BrowserWindowState) -> [Tab] {
+        // For incognito windows, return ephemeral tabs directly
+        if windowState.isIncognito {
+            return windowState.ephemeralTabs
+        }
+        
         print("🔍 tabsForDisplay called for window \(windowState.id.uuidString.prefix(8))...")
 
         // Get tabs for the window's current space
@@ -2072,13 +2081,26 @@ class BrowserManager: ObservableObject {
         windowState.refreshCompositor()
     }
 
-    /// DEPRECATED: Use WebViewCoordinator.getWebView() directly via environment
+/// DEPRECATED: Use WebViewCoordinator.getWebView() directly via environment
     func getWebView(for tabId: UUID, in windowId: UUID) -> WKWebView? {
+        // Check ephemeral tabs first for incognito windows
+        if let windowState = windowRegistry?.windows[windowId],
+           windowState.isIncognito {
+            return webViewCoordinator?.getWebView(for: tabId, in: windowId)
+        }
         return webViewCoordinator?.getWebView(for: tabId, in: windowId)
     }
 
     /// DEPRECATED: Use WebViewCoordinator directly
     func createWebView(for tabId: UUID, in windowId: UUID) -> WKWebView {
+        // Check ephemeral tabs first for incognito windows
+        if let windowState = windowRegistry?.windows[windowId],
+           windowState.isIncognito,
+           let tab = windowState.ephemeralTabs.first(where: { $0.id == tabId }),
+           let coordinator = webViewCoordinator {
+            return coordinator.createWebView(for: tab, in: windowId)
+        }
+        
         guard let tab = tabManager.allTabs().first(where: { $0.id == tabId }),
               let coordinator = webViewCoordinator else {
             fatalError("Tab or WebViewCoordinator not found")
@@ -2223,48 +2245,119 @@ class BrowserManager: ObservableObject {
     }
 
     /// Import Data from arc
-    func importArcData() {
-        Task {
-            let result = await importManager.importArcSidebarData()
+    func importArcData() async {
+        let result = await importManager.importArcSidebarData()
 
-            for space in result.spaces {
-                print("========== \(space.title)")
-                self.tabManager.createSpace(name: space.title, icon: space.emoji ?? "person.fill")
+        for space in result.spaces {
+            print("========== \(space.title)")
+            self.tabManager.createSpace(name: space.title, icon: space.emoji ?? "person.fill")
 
-                guard
-                    let createdSpace = self.tabManager.spaces.first(where: {
-                        $0.name == space.title
-                    })
-                else {
-                    continue
-                }
+            guard
+                let createdSpace = self.tabManager.spaces.first(where: {
+                    $0.name == space.title
+                })
+            else {
+                continue
+            }
 
-                for tab in space.unpinnedTabs {
-                    print("Unpinned tab - \(tab.title)")
-                    self.tabManager.createNewTab(url: tab.url, in: createdSpace)
-                }
+            for tab in space.unpinnedTabs {
+                print("Unpinned tab - \(tab.title)")
+                self.tabManager.createNewTab(url: tab.url, in: createdSpace)
+            }
 
-                for tab in space.pinnedTabs {
-                    print("Pinned tab - \(tab.title)")
+            for tab in space.pinnedTabs {
+                print("Pinned tab - \(tab.title)")
+                let newtab = self.tabManager.createNewTab(url: tab.url, in: createdSpace)
+                self.tabManager.pinTabToSpace(newtab, spaceId: createdSpace.id)
+            }
+            for folder in space.folders {
+                print("Folder - \(folder.title)")
+                let newFolder = self.tabManager.createFolder(
+                    for: createdSpace.id, name: folder.title)
+
+                for tab in folder.tabs {
                     let newtab = self.tabManager.createNewTab(url: tab.url, in: createdSpace)
-                    self.tabManager.pinTabToSpace(newtab, spaceId: createdSpace.id)
-                }
-                for folder in space.folders {
-                    print("Folder - \(folder.title)")
-                    let newFolder = self.tabManager.createFolder(
-                        for: createdSpace.id, name: folder.title)
-
-                    for tab in folder.tabs {
-                        let newtab = self.tabManager.createNewTab(url: tab.url, in: createdSpace)
-                        self.tabManager.moveTabToFolder(tab: newtab, folderId: newFolder.id)
-                    }
+                    self.tabManager.moveTabToFolder(tab: newtab, folderId: newFolder.id)
                 }
             }
-            for topTab in result.topTabs {
-                print("TopTab - \(topTab.title)")
-                let tab = self.tabManager.createNewTab(
-                    url: topTab.url, in: self.tabManager.spaces.first!)
+        }
+        for topTab in result.topTabs {
+            print("TopTab - \(topTab.title)")
+            let tab = self.tabManager.createNewTab(
+                url: topTab.url, in: self.tabManager.spaces.first!)
+            self.tabManager.addToEssentials(tab)
+        }
+    }
+
+    func importDiaData() async {
+        let result = await importManager.importDiaData()
+
+        guard let defaultSpace = self.tabManager.spaces.first else { return }
+
+        for tab in result.favoriteTabs {
+            print("Dia Favorite - \(tab.title)")
+            let newTab = self.tabManager.createNewTab(url: tab.url, in: defaultSpace)
+            self.tabManager.addToEssentials(newTab)
+        }
+
+        for tab in result.windowTabs {
+            print("Dia Tab - \(tab.title)")
+            self.tabManager.createNewTab(url: tab.url, in: defaultSpace)
+        }
+    }
+
+    func importSafariData(from directoryURL: URL, importBookmarks: Bool, importHistory: Bool) async {
+        let result = await importManager.importSafariData(
+            from: directoryURL,
+            importBookmarks: importBookmarks,
+            importHistory: importHistory
+        )
+
+        guard let defaultSpace = self.tabManager.spaces.first else { return }
+
+        if !result.bookmarks.isEmpty {
+            let favoritesBookmarks = result.bookmarks.filter { $0.folder == "Favorites" }
+            let otherBookmarks = result.bookmarks.filter { $0.folder != "Favorites" }
+
+            for bookmark in favoritesBookmarks {
+                let tab = self.tabManager.createNewTab(url: bookmark.url, in: defaultSpace)
                 self.tabManager.addToEssentials(tab)
+            }
+
+            var folderGroups: [String: [SafariBookmark]] = [:]
+            var unfolderedBookmarks: [SafariBookmark] = []
+
+            for bookmark in otherBookmarks {
+                if let folder = bookmark.folder, !folder.isEmpty {
+                    folderGroups[folder, default: []].append(bookmark)
+                } else {
+                    unfolderedBookmarks.append(bookmark)
+                }
+            }
+
+            for (folderName, bookmarks) in folderGroups {
+                let newFolder = self.tabManager.createFolder(for: defaultSpace.id, name: folderName)
+                for bookmark in bookmarks {
+                    let tab = self.tabManager.createNewTab(url: bookmark.url, in: defaultSpace)
+                    self.tabManager.moveTabToFolder(tab: tab, folderId: newFolder.id)
+                }
+            }
+
+            for bookmark in unfolderedBookmarks {
+                self.tabManager.createNewTab(url: bookmark.url, in: defaultSpace)
+            }
+        }
+
+        if !result.history.isEmpty {
+            for entry in result.history {
+                guard let url = URL(string: entry.url) else { continue }
+                historyManager.addVisit(
+                    url: url,
+                    title: entry.title,
+                    timestamp: entry.visitDate,
+                    tabId: nil,
+                    profileId: nil
+                )
             }
         }
     }
@@ -2367,6 +2460,9 @@ class BrowserManager: ObservableObject {
             .environment(windowRegistry)
             .environment(webViewCoordinator)
             .environmentObject(gradientColorManager)
+            .environment(\.nookSettings, nookSettings ?? NookSettingsService())
+            .environment(aiService)
+            .environment(aiConfigService)
 
         newWindow.contentView = NSHostingView(rootView: contentView)
         newWindow.title = "Nook"
@@ -2374,6 +2470,146 @@ class BrowserManager: ObservableObject {
         newWindow.contentMinSize = NSSize(width: 470, height: 382)
         newWindow.center()
         newWindow.makeKeyAndOrderFront(nil)
+    }
+
+    // MARK: - Incognito Window
+    
+    /// Active incognito window IDs
+    @Published private var incognitoWindows: Set<UUID> = []
+    
+    /// Create a new incognito/private browsing window
+    func createIncognitoWindow() {
+        guard let windowRegistry = windowRegistry,
+              let webViewCoordinator = webViewCoordinator else {
+            print("⚠️ [BrowserManager] Cannot create incognito window - missing WindowRegistry or WebViewCoordinator")
+            return
+        }
+
+        let windowState = BrowserWindowState()
+        windowState.isIncognito = true
+        
+        // Create ephemeral profile for this window
+        let ephemeralProfile = profileManager.createEphemeralProfile(for: windowState.id)
+        windowState.ephemeralProfile = ephemeralProfile
+        windowState.currentProfileId = ephemeralProfile.id
+        
+        // Create default ephemeral space
+        let ephemeralSpace = Space(
+            id: UUID(),
+            name: "Incognito",
+            icon: "eye.slash",
+            profileId: ephemeralProfile.id
+        )
+        ephemeralSpace.isEphemeral = true
+        windowState.ephemeralSpaces.append(ephemeralSpace)
+        windowState.currentSpaceId = ephemeralSpace.id
+        
+        // Track as incognito window
+        incognitoWindows.insert(windowState.id)
+        
+        // Create the NSWindow (similar to createNewWindow but with incognito title)
+        let newWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+
+        let contentView = ContentView(windowState: windowState)
+            .background(BackgroundWindowModifier())
+            .ignoresSafeArea(.all)
+            .environmentObject(self)
+            .environment(windowRegistry)
+            .environment(webViewCoordinator)
+            .environmentObject(gradientColorManager)
+            .environment(\.nookSettings, nookSettings ?? NookSettingsService())
+            .environment(aiService)
+            .environment(aiConfigService)
+
+        newWindow.contentView = NSHostingView(rootView: contentView)
+        newWindow.title = "Incognito - Nook"
+        newWindow.minSize = NSSize(width: 470, height: 382)
+        newWindow.contentMinSize = NSSize(width: 470, height: 382)
+        newWindow.center()
+        
+        windowState.window = newWindow
+        
+        // Register the window
+        windowRegistry.register(windowState)
+        windowRegistry.setActive(windowState)
+        
+        // Set tabManager reference only (don't call full setupWindowState - it would overwrite ephemeral state)
+        windowState.tabManager = tabManager
+        
+        // Create initial ephemeral tab
+        createNewTab(in: windowState)
+        
+        newWindow.makeKeyAndOrderFront(nil)
+        
+        print("🔒 [BrowserManager] Created incognito window: \(windowState.id)")
+    }
+    
+    /// Close an incognito window and clean up all ephemeral data
+    /// This method ensures complete destruction of the incognito session with no memory leaks
+    func closeIncognitoWindow(_ windowState: BrowserWindowState) async {
+        guard windowState.isIncognito else { return }
+        
+        print("🔒 [BrowserManager] Closing incognito window: \(windowState.id)")
+        
+        // Step 1: Clean up all clone WebViews for ephemeral tabs from WebViewCoordinator
+        // This is critical - clone WebViews hold references to the data store
+        if let coordinator = webViewCoordinator {
+            for tab in windowState.ephemeralTabs {
+                coordinator.removeAllWebViews(for: tab)
+            }
+        }
+        
+        // Step 2: Clean up main WebViews for ephemeral tabs
+        for tab in windowState.ephemeralTabs {
+            tab.performComprehensiveWebViewCleanup()
+        }
+        
+        // Step 3: Stop tracking this window BEFORE removing profile
+        // This prevents any concurrent access to ephemeral data
+        incognitoWindows.remove(windowState.id)
+        
+        // Step 4: Clear all ephemeral references from window state
+        // This breaks retain cycles BEFORE profile destruction
+        let ephemeralTabs = windowState.ephemeralTabs
+        let ephemeralSpaces = windowState.ephemeralSpaces
+        windowState.ephemeralTabs.removeAll()
+        windowState.ephemeralSpaces.removeAll()
+        windowState.currentTabId = nil
+        
+        // Step 5: Remove ephemeral profile (triggers data store destruction)
+        // This is done last to ensure all references are cleared first
+        await profileManager.removeEphemeralProfile(for: windowState.id)
+        
+        // Step 6: Final cleanup of window state
+        windowState.ephemeralProfile = nil
+        windowState.currentSpaceId = nil
+        
+        // Step 7: Force a memory warning to encourage garbage collection
+        // This helps ensure the data store is released
+        #if DEBUG
+        print("🔒 [BrowserManager] Incognito window closed. Ephemeral tabs: \(ephemeralTabs.count), spaces: \(ephemeralSpaces.count)")
+        #endif
+        
+        print("🔒 [BrowserManager] Incognito window fully closed and cleaned up: \(windowState.id)")
+    }
+    
+    /// Check if a tab can be dragged to a target window (block cross-window for incognito)
+    func canDragTab(_ tab: Tab, toWindow targetWindow: BrowserWindowState) -> Bool {
+        let sourceIsIncognito = tab.isEphemeral
+        let targetIsIncognito = targetWindow.isIncognito
+        
+        // Block dragging between incognito and normal windows
+        return sourceIsIncognito == targetIsIncognito
+    }
+    
+    /// Check if a window is an incognito window
+    func isIncognitoWindow(_ windowId: UUID) -> Bool {
+        return incognitoWindows.contains(windowId)
     }
 
     /// Close the active window
@@ -2506,10 +2742,10 @@ extension BrowserManager {
         zoomPopupHideTimer?.invalidate()
 
         // Schedule new hide timer
-        zoomPopupHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+        zoomPopupHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
-                self.shouldShowZoomPopup = false
-                self.zoomPopupHideTimer = nil
+                self?.shouldShowZoomPopup = false
+                self?.zoomPopupHideTimer = nil
             }
         }
     }
@@ -2533,10 +2769,10 @@ extension BrowserManager {
         zoomPopupHideTimer?.invalidate()
 
         // Schedule new hide timer
-        zoomPopupHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+        zoomPopupHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
-                self.shouldShowZoomPopup = false
-                self.zoomPopupHideTimer = nil
+                self?.shouldShowZoomPopup = false
+                self?.zoomPopupHideTimer = nil
             }
         }
     }
@@ -2560,10 +2796,10 @@ extension BrowserManager {
         zoomPopupHideTimer?.invalidate()
 
         // Schedule new hide timer
-        zoomPopupHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+        zoomPopupHideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
-                self.shouldShowZoomPopup = false
-                self.zoomPopupHideTimer = nil
+                self?.shouldShowZoomPopup = false
+                self?.zoomPopupHideTimer = nil
             }
         }
     }

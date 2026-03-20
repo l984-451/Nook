@@ -29,15 +29,34 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     // Track Option key state for Peek functionality
     var isOptionKeyDown: Bool = false
 
+    // MARK: - OAuth Flow State
+    /// Whether this tab is hosting an OAuth/sign-in flow popup
+    var isOAuthFlow: Bool = false
+    /// Reference to the parent tab that initiated this OAuth flow
+    var oauthParentTabId: UUID?
+    /// The OAuth provider host (e.g., "accounts.google.com") for tracking protection exemption
+    var oauthProviderHost: String?
+    /// The URL pattern that indicates OAuth completion (redirect back to original domain)
+    var oauthCompletionURLPattern: String?
+
     // MARK: - Pin State
     var isPinned: Bool = false  // Global pinned (essentials)
     var isSpacePinned: Bool = false  // Space-level pinned
     var folderId: UUID?  // Folder membership for tabs within spacepinned area
+    
+    // MARK: - Ephemeral State
+    /// Whether this tab belongs to an ephemeral/incognito session
+    var isEphemeral: Bool {
+        return resolveProfile()?.isEphemeral ?? false
+    }
 
     // MARK: - Favicon Cache
     // Global favicon cache shared across profiles by design to increase hit rate
     // and reduce duplicate downloads. Favicons are cached persistently to survive app restarts.
     private static var faviconCache: [String: SwiftUI.Image] = [:]
+    /// MEMORY LEAK FIX: Track insertion order for proper LRU eviction
+    private static var faviconCacheOrder: [String] = []
+    private static let faviconCacheMaxSize = 200
     private static let faviconCacheQueue = DispatchQueue(
         label: "favicon.cache", attributes: .concurrent)
     private static let faviconCacheLock = NSLock()
@@ -107,6 +126,10 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     @Published var canGoBack: Bool = false
     @Published var canGoForward: Bool = false
 
+    // Restored navigation state from undo/session restoration (applied when web view is created)
+    var restoredCanGoBack: Bool?
+    var restoredCanGoForward: Bool?
+
     // MARK: - Video State
     @Published var hasPlayingVideo: Bool = false
     @Published var hasVideoContent: Bool = false  // Track if tab has any video content
@@ -143,9 +166,13 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     private var audioMonitoringTimer: Timer?
     private var hasAddedCoreAudioListener = false
     private var profileAwaitCancellable: AnyCancellable?
+    private var extensionAwaitCancellable: AnyCancellable?
 
     // Web Store integration
     private var webStoreHandler: WebStoreScriptHandler?
+
+    // Debounce task for SPA navigation persistence
+    private var spaPersistDebounceTask: Task<Void, Never>?
 
     // MARK: - Tab State
     var isUnloaded: Bool {
@@ -156,9 +183,30 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     private var _existingWebView: WKWebView?
     var pendingContextMenuPayload: WebContextMenuPayload?
     var didNotifyOpenToExtensions: Bool = false
+    
+    // MARK: - WebView Ownership Tracking (Memory Optimization)
+    /// The window ID that currently "owns" the primary WebView for this tab
+    /// If nil, no window is displaying this tab yet
+    var primaryWindowId: UUID?
+    
+    /// Returns true if this tab has an assigned primary WebView (displayed in any window)
+    var hasAssignedPrimaryWebView: Bool {
+        return primaryWindowId != nil && _webView != nil
+    }
+    
+    /// Returns the WebView IF it has been assigned to a window, nil otherwise
+    /// This prevents creating "orphan" WebViews that are never displayed
+    var assignedWebView: WKWebView? {
+        // Only return WebView if it's been assigned to a window
+        // This prevents the old behavior of creating a WebView on first access
+        return primaryWindowId != nil ? _webView : nil
+    }
+    
     var webView: WKWebView? {
         if _webView == nil {
-            print("🔧 [Tab] First webView access, calling setupWebView() for: \(url.absoluteString)")
+            let stackSymbols = Thread.callStackSymbols.prefix(8).joined(separator: "\n  ")
+            print("🔍 [MEMDEBUG] Tab.webView LAZY ACCESS - Tab: \(id.uuidString.prefix(8)), URL: \(url.absoluteString)")
+            print("🔍 [MEMDEBUG] Stack trace:\n  \(stackSymbols)")
             setupWebView()
         }
         return _webView
@@ -166,10 +214,31 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
 
     var activeWebView: WKWebView {
         if _webView == nil {
-            print("🔧 [Tab] First webView access, calling setupWebView() for: \(url.absoluteString)")
             setupWebView()
         }
         return _webView!
+    }
+
+    /// Returns the existing WebView without triggering lazy initialization
+    var existingWebView: WKWebView? {
+        return _webView
+    }
+    
+    /// Assigns the WebView to a specific window as its "primary" display
+    /// Call this when a window first displays this tab
+    func assignWebViewToWindow(_ webView: WKWebView, windowId: UUID) {
+        print("🔍 [MEMDEBUG] Tab.assignWebViewToWindow() - Tab: \(id.uuidString.prefix(8)), Window: \(windowId.uuidString.prefix(8)), WebView: \(Unmanaged.passUnretained(webView).toOpaque())")
+        
+        // If we already have a WebView assigned to a different window, this is an error
+        // (should have been caught by WebViewCoordinator)
+        if let existingWindow = primaryWindowId, existingWindow != windowId {
+            print("⚠️ [MEMDEBUG] WARNING: Reassigning WebView from window \(existingWindow.uuidString.prefix(8)) to \(windowId.uuidString.prefix(8))")
+        }
+        
+        _webView = webView
+        primaryWindowId = windowId
+        
+        print("🔍 [MEMDEBUG]   -> Primary window assigned: \(windowId.uuidString.prefix(8))")
     }
 
     weak var browserManager: BrowserManager?
@@ -293,6 +362,23 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         }
     }
 
+    /// Applies restored navigation state from undo/session restoration.
+    /// Call this after setting up navigation observers to ensure proper initial state.
+    private func applyRestoredNavigationState() {
+        guard let back = restoredCanGoBack else { return }
+        // Only apply restored state if webView hasn't already set different values
+        // This preserves actual webView state when it differs from restored state
+        if back != canGoBack {
+            canGoBack = back
+        }
+        if let forward = restoredCanGoForward, forward != canGoForward {
+            canGoForward = forward
+        }
+        // Clear restored state after applying
+        restoredCanGoBack = nil
+        restoredCanGoForward = nil
+    }
+
     /// Enhanced navigation state update with aggressive timing for same-domain navigation
     func updateNavigationStateEnhanced(source: String = "unknown") {
         // Immediate update
@@ -312,11 +398,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
 
     /// Inject Web Store script after navigation completes
     private func injectWebStoreScriptIfNeeded(for url: URL, in webView: WKWebView) {
-        // Only inject if experimental extensions are enabled
-        guard let browserManager = browserManager,
-            let nookSettings = nookSettings,
-            nookSettings.experimentalExtensions
-        else {
+        guard let browserManager = browserManager else {
             return
         }
 
@@ -368,11 +450,12 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             
             // Re-add only non-boost scripts (those not in our tracked list)
             let boostScriptSources = Set(currentBoostScripts.map { $0.source })
-            for script in allScripts {
-                if !boostScriptSources.contains(script.source) {
-                    userContentController.addUserScript(script)
-                }
-            }
+//            for script in allScripts {
+//                if !boostScriptSources.contains(script.source) {
+//                    userContentController.addUserScript(script)
+//                }
+//            }
+// MARK: This causes the browser to crash when loading boosted pages
             
             currentBoostScripts.removeAll()
         } else {
@@ -449,6 +532,9 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     // MARK: - WebView Setup
 
     private func setupWebView() {
+        print("🔍 [MEMDEBUG] Tab.setupWebView() START - Tab: \(id.uuidString.prefix(8)), Name: \(name), URL: \(url.absoluteString)")
+        print("🔍 [MEMDEBUG]   _webView exists: \(_webView != nil), _existingWebView exists: \(_existingWebView != nil)")
+        
         let resolvedProfile = resolveProfile()
         let configuration: WKWebViewConfiguration
         if let profile = resolvedProfile {
@@ -475,45 +561,30 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             return
         }
 
-        // Debug: Check what data store this WebView will use
-        let profileInfo = resolvedProfile.map { "\($0.name) [\($0.id.uuidString)]" } ?? "nil"
-        print("[Tab] Resolved profile: \(profileInfo)")
-        let storeIdString: String =
-            configuration.websiteDataStore.identifier?.uuidString ?? "default"
-        print("[Tab] Creating WebView with data store ID: \(storeIdString)")
-        print("[Tab] Data store is persistent: \(configuration.websiteDataStore.isPersistent)")
 
-        // CRITICAL: Ensure the configuration has access to extension controller for ALL URLs
-        // Extensions may load additional resources that also need access
+        // No need to block on extensionsLoaded — the shared config already has the
+        // extension controller set (from setupExtensionController). Content scripts will
+        // inject once individual extension contexts finish loading asynchronously.
+
+        // Ensure the configuration has the extension controller so content scripts can inject
         if #available(macOS 15.5, *) {
-            print("🔍 [Tab] Checking extension controller setup...")
-            print("   Configuration has controller: \(configuration.webExtensionController != nil)")
-            print(
-                "   ExtensionManager has controller: \(ExtensionManager.shared.nativeController != nil)"
-            )
-
-            if configuration.webExtensionController == nil {
-                if let controller = ExtensionManager.shared.nativeController {
-                    configuration.webExtensionController = controller
-                    print("🔧 [Tab] Added extension controller to configuration for resource access")
-                    print("   Controller contexts: \(controller.extensionContexts.count)")
-                } else {
-                    print("❌ [Tab] No extension controller available from ExtensionManager")
-                }
-            } else {
-                print("✅ [Tab] Configuration already has extension controller")
-                if let controller = configuration.webExtensionController {
-                    print("   Controller contexts: \(controller.extensionContexts.count)")
-                }
+            if configuration.webExtensionController == nil,
+               let controller = ExtensionManager.shared.nativeController {
+                configuration.webExtensionController = controller
             }
+            let ctrl = configuration.webExtensionController
+            let ctxs = ctrl?.extensionContexts.count ?? -1
+            let samePool = configuration.processPool === BrowserConfiguration.shared.webViewConfiguration.processPool
+            print("[EXT-CFG] '\(name)' controller=\(ctrl != nil), contexts=\(ctxs), sameProcessPool=\(samePool), existing=\(_existingWebView != nil)")
         }
 
         // Check if we have an existing WebView to inject
         if let existingWebView = _existingWebView {
             _webView = existingWebView
-            print("🔄 [Tab] Using existing WebView for: \(url.absoluteString)")
         } else {
-            _webView = FocusableWKWebView(frame: .zero, configuration: configuration)
+            let newWebView = FocusableWKWebView(frame: .zero, configuration: configuration)
+            _webView = newWebView
+            print("🔍 [MEMDEBUG] Tab CREATED NEW PRIMARY WebView - Tab: \(id.uuidString.prefix(8)), WebView: \(Unmanaged.passUnretained(newWebView).toOpaque()), ConfigStore: \(configuration.websiteDataStore.identifier?.uuidString.prefix(8) ?? "default")")
             if let fv = _webView as? FocusableWKWebView {
                 fv.owningTab = self
                 fv.contextMenuBridge = WebContextMenuBridge(tab: self, configuration: configuration)
@@ -528,6 +599,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         if let webView = _webView {
             setupThemeColorObserver(for: webView)
             setupNavigationStateObservers(for: webView)
+            applyRestoredNavigationState()
         }
 
         // Only set up script handlers and user agent for new WebViews
@@ -552,6 +624,8 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
                 forName: "NookIdentity")
             _webView?.configuration.userContentController.removeScriptMessageHandler(
                 forName: "nookWebStore")
+            _webView?.configuration.userContentController.removeScriptMessageHandler(
+                forName: "nookShortcutDetect")
 
             // Add handlers
             _webView?.configuration.userContentController.add(self, name: "linkHover")
@@ -564,12 +638,10 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
                 self, name: "backgroundColor_\(id.uuidString)")
             _webView?.configuration.userContentController.add(self, name: "historyStateDidChange")
             _webView?.configuration.userContentController.add(self, name: "NookIdentity")
+            _webView?.configuration.userContentController.add(self, name: "nookShortcutDetect")
 
-            // Add Web Store integration handler (only if experimental extensions are enabled)
-            if let browserManager = browserManager,
-                let nookSettings = nookSettings,
-                nookSettings.experimentalExtensions
-            {
+            // Add Web Store integration handler for Chrome Web Store extension installs
+            if let browserManager = browserManager {
                 webStoreHandler = WebStoreScriptHandler(browserManager: browserManager)
                 _webView?.configuration.userContentController.add(
                     webStoreHandler!, name: "nookWebStore")
@@ -585,7 +657,10 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             _webView?.customUserAgent =
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0.1 Safari/605.1.15"
 
-            _webView?.setValue(false, forKey: "drawsBackground")
+            // Let the web content control its own background so extension styles
+            // (like Dark Reader) can paint dark backgrounds. The app's themed
+            // background is only visible while the page is loading.
+            _webView?.setValue(true, forKey: "drawsBackground")
         }
 
         if let webView = _webView {
@@ -603,15 +678,20 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
 
         // For existing WebViews, ensure the delegates are updated to point to this tab
         if _existingWebView != nil {
-            print("🔄 [Tab] Updated delegates for existing WebView in tab: \(name)")
+            print("🔍 [MEMDEBUG] Tab setup COMPLETE (existing WebView) - Tab: \(id.uuidString.prefix(8))")
         } else {
-            print("Created WebView for tab: \(name)")
+            print("🔍 [MEMDEBUG] Tab setup COMPLETE (new WebView) - Tab: \(id.uuidString.prefix(8)), WebView: \(Unmanaged.passUnretained(_webView!).toOpaque())")
         }
 
         // Inform extensions that this tab's view is now open/available BEFORE loading,
         // so content scripts and messaging can resolve this tab during early document phases
         if #available(macOS 15.5, *), didNotifyOpenToExtensions == false {
             ExtensionManager.shared.notifyTabOpened(self)
+            // Also activate this tab if it's the current one, so the controller
+            // can route chrome.runtime messages correctly
+            if browserManager?.currentTabForActiveWindow()?.id == self.id {
+                ExtensionManager.shared.notifyTabActivated(newTab: self, previous: nil)
+            }
             didNotifyOpenToExtensions = true
         }
         // For popup-hosting tabs, don't trigger an initial navigation. WebKit will
@@ -619,13 +699,27 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         // Also don't reload if we're using an existing WebView (from Peek)
         if !isPopupHost && _existingWebView == nil {
             loadURL(url)
-        } else if _existingWebView != nil {
-            print("🔄 [Tab] Skipping URL load for existing WebView in tab: \(name)")
         }
     }
 
     // Resolve the Profile for this tab via its space association, or fall back to currentProfile, then default profile
     func resolveProfile() -> Profile? {
+        // First, check if we have a direct profileId assignment (including ephemeral tabs)
+        if let pid = profileId {
+            // Check ephemeral profiles first
+            if let windowState = browserManager?.windowRegistry?.windows.values.first(where: { window in
+                window.ephemeralTabs.contains(where: { $0.id == self.id })
+            }),
+               let ephemeralProfile = windowState.ephemeralProfile,
+               ephemeralProfile.id == pid {
+                return ephemeralProfile
+            }
+            // Check regular profiles
+            if let profile = browserManager?.profileManager.profiles.first(where: { $0.id == pid }) {
+                return profile
+            }
+        }
+        
         // Attempt to resolve via associated space
         if let sid = spaceId,
             let space = browserManager?.tabManager.spaces.first(where: { $0.id == sid })
@@ -690,9 +784,11 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         // 15. REMOVE FROM TAB MANAGER
         browserManager?.tabManager.removeTab(self.id)
 
-        // Cancel any pending profile observation
+        // Cancel any pending observations
         profileAwaitCancellable?.cancel()
         profileAwaitCancellable = nil
+        extensionAwaitCancellable?.cancel()
+        extensionAwaitCancellable = nil
 
         print("Tab killed: \(name)")
     }
@@ -702,9 +798,11 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         // Note: We can't access main actor-isolated properties in deinit,
         // but we can still clean up non-actor properties
 
-        // Cancel any pending profile observation
+        // Cancel any pending observations
         profileAwaitCancellable?.cancel()
         profileAwaitCancellable = nil
+        extensionAwaitCancellable?.cancel()
+        extensionAwaitCancellable = nil
 
         // Clear theme color observers
         themeColorObservedWebViews.removeAllObjects()
@@ -718,6 +816,11 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     func loadURL(_ newURL: URL) {
         self.url = newURL
         loadingState = .didStartProvisionalNavigation
+
+        // Grant extension access before loading so content scripts inject at document_start
+        if #available(macOS 15.4, *) {
+            ExtensionManager.shared.grantExtensionAccessToURL(newURL)
+        }
 
         // Reset audio tracking for new page but preserve mute state
         hasAudioContent = false
@@ -756,8 +859,9 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
 
     /// Navigate to a new URL with proper search engine normalization
     func navigateToURL(_ input: String) {
-        let engine = nookSettings?.searchEngine ?? .google
-        let normalizedUrl = normalizeURL(input, provider: engine)
+        let settings = nookSettings ?? browserManager?.nookSettings
+        let template = settings?.resolvedSearchEngineTemplate ?? SearchProvider.google.queryTemplate
+        let normalizedUrl = normalizeURL(input, queryTemplate: template)
 
         guard let validURL = URL(string: normalizedUrl) else {
             print("Invalid URL after normalization: \(input) -> \(normalizedUrl)")
@@ -1292,6 +1396,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             "backgroundColor_\(id.uuidString)",
             "historyStateDidChange",
             "NookIdentity",
+            "nookShortcutDetect",
         ]
 
         for handlerName in allMessageHandlers {
@@ -1521,6 +1626,10 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
                 self, forKeyPath: "canGoBack", options: [.new, .initial], context: nil)
             webView.addObserver(
                 self, forKeyPath: "canGoForward", options: [.new, .initial], context: nil)
+            webView.addObserver(
+                self, forKeyPath: "title", options: [.new], context: nil)
+            // NOTE: URL observer removed - it was firing during setup and overwriting
+            // restored URLs. URL updates are handled by didCommit/didFinish delegates.
             navigationStateObservedWebViews.add(webView)
             print("🔍 [Tab] Set up navigation state observers for \(name)")
         }
@@ -1531,6 +1640,8 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         if navigationStateObservedWebViews.contains(webView) {
             webView.removeObserver(self, forKeyPath: "canGoBack")
             webView.removeObserver(self, forKeyPath: "canGoForward")
+            webView.removeObserver(self, forKeyPath: "title")
+            // NOTE: URL observer removed - see setupNavigationStateObservers
             navigationStateObservedWebViews.remove(webView)
             print("🔍 [Tab] Removed navigation state observers for \(name)")
         }
@@ -1591,21 +1702,29 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             "backgroundColor_\(id.uuidString)",
             "historyStateDidChange",
             "NookIdentity",
+            "nookShortcutDetect",
         ]
 
         for handlerName in allMessageHandlers {
             controller.removeScriptMessageHandler(forName: handlerName)
         }
 
-        // 4. Remove theme color and navigation state observers
+        // 4. MEMORY LEAK FIX: Detach contextMenuBridge before clearing delegates
+        // This breaks the retain cycle: WKWebView → contextMenuBridge → userContentController → WKWebView
+        if let focusableWebView = webView as? FocusableWKWebView {
+            focusableWebView.contextMenuBridge?.detach()
+            focusableWebView.contextMenuBridge = nil
+        }
+
+        // 5. Remove theme color and navigation state observers
         removeThemeColorObserver(from: webView)
         removeNavigationStateObservers(from: webView)
 
-        // 5. Clear all delegates
+        // 6. Clear all delegates
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
 
-        // 6. Remove from view hierarchy
+        // 7. Remove from view hierarchy
         webView.removeFromSuperview()
 
         // 7. Force remove from compositor
@@ -1615,7 +1734,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     }
 
     /// MEMORY LEAK FIX: Comprehensive cleanup for the main tab WebView
-    private func performComprehensiveWebViewCleanup() {
+    public func performComprehensiveWebViewCleanup() {
         guard let webView = _webView else { return }
 
         print("🧹 [Tab] Performing comprehensive cleanup for main WebView: \(name)")
@@ -1644,6 +1763,15 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
                 "🔄 [Tab] KVO navigation state change for \(name): \(observedKeyPath) = \(webView.canGoBack), \(webView.canGoForward)"
             )
             updateNavigationState()
+        } else if keyPath == "title", let webView = object as? WKWebView {
+            // Real-time title updates from KVO (especially for SPAs)
+            if let newTitle = webView.title, !newTitle.isEmpty, newTitle != self.name {
+                print("📄 [Tab] KVO title change for \(name): '\(newTitle)'")
+                updateTitle(newTitle)
+            }
+        } else if keyPath == "URL", let webView = object as? WKWebView {
+            // URL observer disabled - was causing restored URLs to be overwritten
+            // URL updates are handled by didCommit/didFinish navigation delegates
         } else {
             super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
         }
@@ -2075,6 +2203,19 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             }
         }
     }
+    
+    private func injectShortcutDetection(to webView: WKWebView) {
+        // Inject the JS script from WebsiteShortcutDetector for runtime shortcut detection
+        let script = WebsiteShortcutDetector.jsDetectionScript
+        
+        webView.evaluateJavaScript(script) { _, error in
+            if let error = error {
+                print("⚠️ [Tab] Error injecting shortcut detection: \(error.localizedDescription)")
+            } else {
+                print("⌨️ [Tab] Shortcut detection script injected")
+            }
+        }
+    }
 
     func activate() {
         browserManager?.tabManager.setActiveTab(self)
@@ -2094,7 +2235,10 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     }
 
     func updateTitle(_ title: String) {
-        self.name = title.isEmpty ? url.host ?? "New Tab" : title
+        let newName = title.isEmpty ? url.host ?? "New Tab" : title
+        // Only update if title actually changed to prevent redundant redraws
+        guard newName != self.name else { return }
+        self.name = newName
         if #available(macOS 15.5, *) {
             ExtensionManager.shared.notifyTabPropertiesChanged(self, properties: [.title])
         }
@@ -2184,14 +2328,19 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
 
         faviconCache[key] = favicon
 
-        // Limit cache size to prevent memory issues
-        if faviconCache.count > 100 {
-            // Remove oldest entries (simple FIFO)
-            let keysToRemove = Array(faviconCache.keys.prefix(20))
+        // MEMORY LEAK FIX: Maintain insertion order for proper LRU eviction
+        faviconCacheOrder.removeAll { $0 == key }
+        faviconCacheOrder.append(key)
+
+        // Evict oldest entries when cache exceeds max size
+        if faviconCache.count > faviconCacheMaxSize {
+            let evictCount = faviconCache.count - faviconCacheMaxSize + 20
+            let keysToRemove = Array(faviconCacheOrder.prefix(evictCount))
             for keyToRemove in keysToRemove {
                 faviconCache.removeValue(forKey: keyToRemove)
                 removeFaviconFromDisk(for: keyToRemove)
             }
+            faviconCacheOrder.removeFirst(min(evictCount, faviconCacheOrder.count))
         }
     }
 
@@ -2298,6 +2447,8 @@ extension Tab: WKNavigationDelegate {
         if let newURL = webView.url {
             self.url = newURL
             browserManager?.syncTabAcrossWindows(self.id)
+            // Update website shortcut detector with new URL
+            browserManager?.keyboardShortcutManager?.websiteShortcutDetector.updateCurrentURL(newURL)
             if #available(macOS 15.5, *) {
                 ExtensionManager.shared.notifyTabPropertiesChanged(self, properties: [.URL])
             }
@@ -2320,6 +2471,9 @@ extension Tab: WKNavigationDelegate {
             self.url = newURL
             if #available(macOS 15.5, *) {
                 ExtensionManager.shared.notifyTabPropertiesChanged(self, properties: [.URL])
+
+                // Extension diagnostics: check content scripts, background worker, and messaging
+                ExtensionManager.shared.diagnoseExtensionState(for: webView, url: newURL)
             }
             browserManager?.syncTabAcrossWindows(self.id)
 
@@ -2345,14 +2499,16 @@ extension Tab: WKNavigationDelegate {
 
                     // Add to profile-aware history after title is updated
                     if let currentURL = webView.url {
-                        let profileId =
-                            self?.resolveProfile()?.id ?? self?.browserManager?.currentProfile?.id
+                        let profile = self?.resolveProfile()
+                        let profileId = profile?.id ?? self?.browserManager?.currentProfile?.id
+                        let isEphemeral = profile?.isEphemeral ?? false
                         self?.browserManager?.historyManager.addVisit(
                             url: currentURL,
                             title: title,
                             timestamp: Date(),
                             tabId: self?.id,
-                            profileId: profileId
+                            profileId: profileId,
+                            isEphemeral: isEphemeral
                         )
                     }
 
@@ -2379,6 +2535,7 @@ extension Tab: WKNavigationDelegate {
         injectPiPStateListener(to: webView)
         injectMediaDetection(to: webView)
         injectHistoryStateObserver(into: webView)
+        injectShortcutDetection(to: webView)
         updateNavigationStateEnhanced(source: "didCommit")
 
         // Trigger background color extraction after page fully loads
@@ -2396,6 +2553,11 @@ extension Tab: WKNavigationDelegate {
         // Apply mute state using MuteableWKWebView if the tab was previously muted
         if isAudioMuted {
             setMuted(true)
+        }
+        
+        // Check for OAuth completion and auto-close if needed
+        if isOAuthFlow, let currentURL = webView.url {
+            checkOAuthCompletion(url: currentURL)
         }
     }
 
@@ -2461,7 +2623,13 @@ extension Tab: WKNavigationDelegate {
             navigationAction.targetFrame?.isMainFrame == true
         {
             browserManager?.maybeShowOAuthAssist(for: url, in: self)
-            
+
+            // Grant extension access to this URL BEFORE navigation starts
+            // so content scripts can inject at document_start
+            if #available(macOS 15.4, *) {
+                ExtensionManager.shared.grantExtensionAccessToURL(url)
+            }
+
             // Setup boost user script before navigation starts
             setupBoostUserScript(for: url, in: webView)
         }
@@ -2690,16 +2858,45 @@ extension Tab: WKScriptMessageHandler {
                     if self.url.absoluteString != url.absoluteString {
                         self.url = url
                         self.browserManager?.syncTabAcrossWindows(self.id)
+
+                        // Debounce persistence for SPA navigation to avoid excessive writes
+                        self.spaPersistDebounceTask?.cancel()
+                        self.spaPersistDebounceTask = Task { [weak self] in
+                            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+                            guard !Task.isCancelled else { return }
+                            self?.browserManager?.tabManager.persistSnapshot()
+                        }
                     }
                 }
             }
 
         case "NookIdentity":
             handleOAuthRequest(message: message)
+            
+        case "nookShortcutDetect":
+            handleShortcutDetection(message: message)
 
         default:
             break
         }
+    }
+    
+    private func handleShortcutDetection(message: WKScriptMessage) {
+        // Handle detected shortcuts from JS injection
+        guard let shortcutsString = message.body as? String else { return }
+        
+        // Use the frame's webView URL for correct attribution, fallback to _webView
+        let currentURL = message.frameInfo.webView?.url?.absoluteString ?? _webView?.url?.absoluteString
+        guard let url = currentURL else { return }
+        
+        // Parse the comma-separated shortcuts
+        let shortcuts = Set(shortcutsString.split(separator: ",").map { String($0) })
+        
+        // Update the detector with detected shortcuts for this URL
+        browserManager?.keyboardShortcutManager?.websiteShortcutDetector.updateJSDetectedShortcuts(
+            for: url,
+            shortcuts: shortcuts
+        )
     }
 
     private func handleCommandClick(url: URL) {
@@ -2793,47 +2990,14 @@ extension Tab: WKScriptMessageHandler {
     }
 
     private func isLikelyOAuthOrExternalWindow(url: URL, windowFeatures: WKWindowFeatures) -> Bool {
-        let host = (url.host ?? "").lowercased()
-        let path = url.path.lowercased()
-        let query = url.query?.lowercased() ?? ""
+        if OAuthDetector.isLikelyOAuthPopupURL(url) { return true }
 
-        // Check for OAuth-related URLs
-        let oauthHosts = [
-            "accounts.google.com", "login.microsoftonline.com", "login.live.com",
-            "appleid.apple.com", "github.com", "gitlab.com", "bitbucket.org",
-            "auth0.com", "okta.com", "onelogin.com", "pingidentity.com",
-            "slack.com", "zoom.us", "login.cloudflareaccess.com",
-            "oauth", "auth", "login", "signin",
-        ]
-
-        // Check if host contains OAuth-related terms
-        if oauthHosts.contains(where: { host.contains($0) }) {
-            return true
-        }
-
-        // Check for OAuth paths and query parameters
-        if path.contains("/oauth") || path.contains("oauth2") || path.contains("/authorize")
-            || path.contains("/signin") || path.contains("/login") || path.contains("/callback")
-        {
-            return true
-        }
-
-        if query.contains("client_id=") || query.contains("redirect_uri=")
-            || query.contains("response_type=") || query.contains("scope=")
-        {
-            return true
-        }
-
-        // Check window features that suggest external/popup behavior
+        // If the popup has explicit dimensions it's almost certainly a modal sign-in window
         if let width = windowFeatures.width, let height = windowFeatures.height,
             width.doubleValue > 0 && height.doubleValue > 0
         {
-            // If specific dimensions are set, it's likely a popup
             return true
         }
-
-        // Note: WKWindowFeatures visibility properties are NSNumber? and don't directly map to enum values
-        // We'll rely on URL patterns and dimensions for popup detection
 
         return false
     }
@@ -2871,21 +3035,50 @@ extension Tab: WKUIDelegate {
     ) -> WKWebView? {
         guard let bm = browserManager else { return nil }
 
-        // OAuth and signin flows should ALWAYS open in a new tab in the same profile/data store
-        // Miniwindows use separate data stores which breaks OAuth flows
-        if let url = navigationAction.request.url,
+        // OAuth and signin flows should open in a miniwindow for better UX
+        // The miniwindow handles OAuth completion detection and notifies the parent tab
+        // Skip this for extension-originated navigations — extensions manage their own auth flows
+        let sourceScheme = navigationAction.sourceFrame.request.url?.scheme?.lowercased() ?? ""
+        let isFromExtension = sourceScheme == "webkit-extension" || sourceScheme == "safari-web-extension"
+        if !isFromExtension,
+            let url = navigationAction.request.url,
             isLikelyOAuthOrExternalWindow(url: url, windowFeatures: windowFeatures)
         {
-            print("🔐 [Tab] OAuth/signin popup detected, opening in new tab: \(url.absoluteString)")
-            // Create a new tab in the same space with the same profile/data store
-            let newTab = bm.tabManager.createNewTab(
-                url: url.absoluteString, in: bm.tabManager.currentSpace)
-            bm.tabManager.setActiveTab(newTab)
-            return nil  // Don't create a WebView, we created a tab instead
+            print("🔐 [Tab] OAuth/signin popup detected, opening in miniwindow: \(url.absoluteString)")
+            
+            // Auto-allow the OAuth provider domain for tracking protection
+            if let providerHost = url.host?.lowercased() {
+                bm.oauthAllowDomain(providerHost)
+            }
+            
+            // Store reference to parent tab for completion callback
+            let parentTabId = self.id
+            
+            // Open OAuth flow in miniwindow
+            bm.externalMiniWindowManager.present(url: url) { [weak bm] success, finalURL in
+                print("🔐 [Tab] Miniwindow OAuth flow completed: success=\(success), url=\(finalURL?.absoluteString ?? "nil")")
+                
+                guard let bm = bm else { return }
+                
+                // Find the parent tab and reload it
+                if let parentTab = bm.tabManager.allTabs().first(where: { $0.id == parentTabId }) {
+                    DispatchQueue.main.async {
+                        if success {
+                            bm.tabManager.setActiveTab(parentTab)
+                            parentTab.activeWebView.reload()
+                            print("🔐 [Tab] Parent tab reloaded after successful OAuth")
+                        }
+                    }
+                }
+            }
+            
+            return nil  // Don't create a WebView, miniwindow handles it
         }
 
         // For regular popups, check if this should be redirected to Peek
-        if let url = navigationAction.request.url,
+        // Skip Peek for extension-originated navigations
+        if !isFromExtension,
+            let url = navigationAction.request.url,
             shouldRedirectToPeek(url: url)
         {
 
@@ -2966,6 +3159,76 @@ extension Tab: WKUIDelegate {
         return newWebView
     }
 
+    // MARK: - OAuth Tab Helpers
+    
+    /// Sets up message handlers for an OAuth popup tab
+    private func setupOAuthTabMessageHandlers(for tab: Tab, webView: WKWebView) {
+        let userContentController = webView.configuration.userContentController
+        
+        // Remove any existing handlers first
+        let handlerNames = ["linkHover", "commandHover", "commandClick", "pipStateChange",
+                           "mediaStateChange_\(tab.id.uuidString)",
+                           "backgroundColor_\(tab.id.uuidString)",
+                           "historyStateDidChange", "NookIdentity"]
+        
+        for handlerName in handlerNames {
+            userContentController.removeScriptMessageHandler(forName: handlerName)
+        }
+        
+        // Add handlers for the OAuth tab
+        userContentController.add(tab, name: "linkHover")
+        userContentController.add(tab, name: "commandHover")
+        userContentController.add(tab, name: "commandClick")
+        userContentController.add(tab, name: "pipStateChange")
+        userContentController.add(tab, name: "mediaStateChange_\(tab.id.uuidString)")
+        userContentController.add(tab, name: "backgroundColor_\(tab.id.uuidString)")
+        userContentController.add(tab, name: "historyStateDidChange")
+        userContentController.add(tab, name: "NookIdentity")
+    }
+    
+    /// Checks if a URL indicates OAuth completion and handles the flow
+    private func checkOAuthCompletion(url: URL) {
+        guard isOAuthFlow, let parentTabId = oauthParentTabId,
+              let bm = browserManager else { return }
+        
+        let urlString = url.absoluteString.lowercased()
+        let host = url.host?.lowercased() ?? ""
+        
+        // Check for OAuth success indicators
+        let successIndicators = ["code=", "access_token=", "id_token=", "oauth_token=",
+                                "oauth_verifier=", "session_state=", "samlresponse="]
+        
+        // Check for OAuth error indicators
+        let errorIndicators = ["error=", "access_denied", "invalid_request", "denied"]
+        
+        let isSuccess = successIndicators.contains { urlString.contains($0) }
+        let isError = errorIndicators.contains { urlString.contains($0) }
+        
+        // Check if this is a redirect back to the original domain (not the OAuth provider)
+        if let providerHost = oauthProviderHost, !host.contains(providerHost),
+           (isSuccess || isError || !OAuthDetector.isLikelyOAuthURL(url)) {
+            
+            print("🔐 [Tab] OAuth flow completed: success=\(isSuccess), closing OAuth tab")
+            
+            // Find and reload the parent tab
+            if let parentTab = bm.tabManager.allTabs().first(where: { $0.id == parentTabId }) {
+                DispatchQueue.main.async { [weak bm] in
+                    // Switch to parent tab
+                    bm?.tabManager.setActiveTab(parentTab)
+                    // Reload parent tab to pick up authenticated state
+                    parentTab.activeWebView.reload()
+                }
+            }
+            
+            // Close this OAuth tab
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak bm, weak self] in
+                guard let self = self, let bm = bm else { return }
+                print("🔐 [Tab] Auto-closing OAuth tab: \(self.name)")
+                bm.tabManager.removeTab(self.id)
+            }
+        }
+    }
+    
     private func handleMiniWindowAuthCompletion(success: Bool, finalURL: URL?) {
         print(
             "🪟 [Tab] Popup OAuth flow completed: success=\(success), finalURL=\(finalURL?.absoluteString ?? "nil")"
@@ -2990,8 +3253,13 @@ extension Tab: WKUIDelegate {
         alert.messageText = "JavaScript Alert"
         alert.informativeText = message
         alert.addButton(withTitle: "OK")
-        alert.runModal()
-        completionHandler()
+        if let window = webView.window {
+            alert.beginSheetModal(for: window) { _ in
+                completionHandler()
+            }
+        } else {
+            completionHandler()
+        }
     }
 
     public func webView(
@@ -3005,8 +3273,13 @@ extension Tab: WKUIDelegate {
         alert.informativeText = message
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
-        let result = alert.runModal()
-        completionHandler(result == .alertFirstButtonReturn)
+        if let window = webView.window {
+            alert.beginSheetModal(for: window) { result in
+                completionHandler(result == .alertFirstButtonReturn)
+            }
+        } else {
+            completionHandler(false)
+        }
     }
 
     public func webView(
@@ -3026,9 +3299,10 @@ extension Tab: WKUIDelegate {
         textField.stringValue = defaultText ?? ""
         alert.accessoryView = textField
 
-        let result = alert.runModal()
-        if result == .alertFirstButtonReturn {
-            completionHandler(textField.stringValue)
+        if let window = webView.window {
+            alert.beginSheetModal(for: window) { result in
+                completionHandler(result == .alertFirstButtonReturn ? textField.stringValue : nil)
+            }
         } else {
             completionHandler(nil)
         }
@@ -3147,9 +3421,9 @@ extension Tab: WKUIDelegate {
         completionHandler(true, nil)
     }
 
-    // MARK: - WebAuthn / Passkey Support
+    // MARK: - Media Capture Authorization
 
-    /// Handle requests for media capture authorization (including WebAuthn/passkey requests)
+    /// Handle requests for camera/microphone capture authorization
     @available(macOS 13.0, *)
     public func webView(
         _ webView: WKWebView,
@@ -3162,8 +3436,6 @@ extension Tab: WKUIDelegate {
             "🔐 [Tab] Media capture authorization requested for type: \(type.rawValue) from origin: \(origin)"
         )
 
-        // For passkeys/WebAuthn, we want to grant permission
-        // The system will handle the actual Touch ID/Face ID prompt
         decisionHandler(.grant)
     }
 }
@@ -3509,9 +3781,13 @@ extension Tab {
 
 extension Tab {
     func deliverContextMenuPayload(_ payload: WebContextMenuPayload?) {
+        print("🔽 [Tab] deliverContextMenuPayload called, payload exists: \(payload != nil)")
         pendingContextMenuPayload = payload
         if let webView = _webView as? FocusableWKWebView {
+            print("🔽 [Tab] Calling webView.contextMenuPayloadDidUpdate")
             webView.contextMenuPayloadDidUpdate(payload)
+        } else {
+            print("🔽 [Tab] WARNING: _webView is nil or not FocusableWKWebView")
         }
     }
 }

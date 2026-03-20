@@ -7,8 +7,10 @@
 
 import AppKit
 import Foundation
+import os
 import SwiftData
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 @available(macOS 15.4, *)
@@ -17,16 +19,20 @@ final class ExtensionManager: NSObject, ObservableObject,
     WKWebExtensionControllerDelegate, NSPopoverDelegate
 {
     static let shared = ExtensionManager()
+    private static let logger = Logger(subsystem: "com.nook.browser", category: "Extensions")
 
     @Published var installedExtensions: [InstalledExtension] = []
     @Published var isExtensionSupportAvailable: Bool = false
     @Published var isPopupActive: Bool = false
+    @Published var extensionsLoaded: Bool = false
     // Scope note: Installed/enabled state is global across profiles; extension storage/state
     // (chrome.storage, cookies, etc.) is isolated per-profile via profile-specific data stores.
 
     private var extensionController: WKWebExtensionController?
     private var extensionContexts: [String: WKWebExtensionContext] = [:]
     private var actionAnchors: [String: [WeakAnchor]] = [:]
+    /// MEMORY LEAK FIX: Store observer tokens so they can be removed when anchors change
+    private var anchorObserverTokens: [String: [Any]] = [:]
     // Keep options windows alive per extension id
     private var optionsWindows: [String: NSWindow] = [:]
     // Stable adapters for tabs/windows used when notifying controller events
@@ -34,10 +40,8 @@ final class ExtensionManager: NSObject, ObservableObject,
     internal var windowAdapter: ExtensionWindowAdapter?
     private weak var browserManagerRef: BrowserManager?
     // Whether to auto-resize extension action popovers to content. Disabled per UX preference.
-    private let shouldAutoSizeActionPopups: Bool = false
     // UI delegate for popup context menus
     private var popupUIDelegate: PopupUIDelegate?
-
     // No preference for action popups-as-tabs; keep native popovers per Apple docs
 
     let context: ModelContext
@@ -69,6 +73,14 @@ final class ExtensionManager: NSObject, ObservableObject,
         tabAdapters.removeAll()
         actionAnchors.removeAll()
 
+        // MEMORY LEAK FIX: Remove all stored notification observer tokens
+        for (_, tokens) in anchorObserverTokens {
+            for token in tokens {
+                NotificationCenter.default.removeObserver(token)
+            }
+        }
+        anchorObserverTokens.removeAll()
+
         // Close all options windows
         for (_, window) in optionsWindows {
             Task { @MainActor in
@@ -91,7 +103,7 @@ final class ExtensionManager: NSObject, ObservableObject,
         extensionController = nil
         extensionContexts.removeAll()
 
-        print("🧹 [ExtensionManager] Cleaned up all extension resources")
+        Self.logger.info("Cleaned up all extension resources")
     }
 
     // MARK: - Setup
@@ -114,61 +126,38 @@ final class ExtensionManager: NSObject, ObservableObject,
             config = WKWebExtensionController.Configuration(identifier: uuid)
         }
 
-        let controller = WKWebExtensionController(configuration: config)
-        controller.delegate = self
-
-        // Store controller reference first
-        self.extensionController = controller
-
         let sharedWebConfig = BrowserConfiguration.shared.webViewConfiguration
 
         // Create or select a persistent data store for extensions.
-        // If we already have a profile context, use a profile-specific store; otherwise use a shared fallback.
         let extensionDataStore: WKWebsiteDataStore
         if let pid = currentProfileId {
             extensionDataStore = getExtensionDataStore(for: pid)
         } else {
-            // Fallback shared persistent store until a profile is assigned
             extensionDataStore = WKWebsiteDataStore(
                 forIdentifier: config.identifier!
             )
         }
 
-        // Verify data store is properly initialized
         if !extensionDataStore.isPersistent {
-            print(
-                "⚠️ Warning: Extension data store is not persistent - this may cause storage issues"
-            )
+            Self.logger.error("Extension data store is not persistent - this may cause storage issues")
         }
 
-        controller.configuration.defaultWebsiteDataStore = extensionDataStore
-        controller.configuration.webViewConfiguration = sharedWebConfig
+        // CRITICAL: Set webViewConfiguration and defaultWebsiteDataStore on the config BEFORE
+        // creating the controller. WKWebExtensionController.configuration returns a COPY (like
+        // WKWebView.configuration), so setting properties on it after init modifies a temporary
+        // copy that gets discarded. The background worker needs the shared webViewConfiguration
+        // to share the same process pool as page webviews for chrome.runtime messaging to work.
+        config.defaultWebsiteDataStore = extensionDataStore
+        config.webViewConfiguration = sharedWebConfig
 
-        print(
-            "ExtensionManager: WKWebExtensionController configured with persistent storage identifier: \(config.identifier?.uuidString ?? "none")"
-        )
-        print(
-            "   Extension data store is persistent: \(extensionDataStore.isPersistent)"
-        )
-        print(
-            "   Extension data store ID: \(extensionDataStore.identifier?.uuidString ?? "none")"
-        )
-        print(
-            "   App WebViews use separate default data store for normal browsing"
-        )
+        let controller = WKWebExtensionController(configuration: config)
+        controller.delegate = self
+        self.extensionController = controller
 
-        print(
-            "   Native storage types supported: .local, .session, .synchronized"
-        )
-        print(
-            "   World support (MAIN/ISOLATED): \(ExtensionUtils.isWorldInjectionSupported)"
-        )
+        Self.logger.debug("Controller configured with storage ID: \(config.identifier?.uuidString ?? "none", privacy: .public), persistent: \(extensionDataStore.isPersistent)")
 
         // Handle macOS 15.4+ ViewBridge issues with delayed delegate assignment
-        print(
-            "⚠️ Running on macOS 15.4+ - using delayed delegate assignment to avoid ViewBridge issues"
-        )
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             controller.delegate = self
         }
 
@@ -179,30 +168,602 @@ final class ExtensionManager: NSObject, ObservableObject,
             sharedWebConfig.defaultWebpagePreferences.allowsContentJavaScript =
                 true
 
-            print(
-                "ExtensionManager: Configured shared WebView configuration with extension controller"
-            )
+            Self.logger.debug("Configured shared WebView configuration with extension controller")
 
             // Update existing WebViews with controller
             updateExistingWebViewsWithController(controller)
         }
 
-        extensionController = controller
-
         // Verify storage is working after setup
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
             self.verifyExtensionStorage(self.currentProfileId)
         }
 
-        print(
-            "ExtensionManager: Native WKWebExtensionController initialized and configured"
+        Self.logger.info("Native WKWebExtensionController initialized and configured")
+    }
+
+    // MARK: - Externally Connectable Bridge
+
+    /// Set up the externally_connectable bridge for an extension.
+    ///
+    /// Problem: Web pages (like account.proton.me) call browser.runtime.sendMessage(SAFARI_EXT_ID, msg)
+    /// to communicate with the extension. The Safari extension ID doesn't match our WKWebExtension
+    /// uniqueIdentifier, so the call fails and the page shows an error.
+    ///
+    /// Fix: Inject a user script into matching pages that wraps browser.runtime.sendMessage.
+    /// When called with an external extensionId, it strips the ID and forwards as a regular
+    /// content-script-to-background message (which the background handles — this is the same
+    /// path Firefox uses via its postMessage fallback).
+    @available(macOS 15.4, *)
+    private func setupExternallyConnectableBridge(
+        for extensionContext: WKWebExtensionContext,
+        extensionId: String,
+        packagePath: String
+    ) {
+        let manifestURL = URL(fileURLWithPath: packagePath).appendingPathComponent("manifest.json")
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ec = manifest["externally_connectable"] as? [String: Any],
+              let matchPatterns = ec["matches"] as? [String], !matchPatterns.isEmpty
+        else { return }
+
+        // Extract hostnames from match patterns
+        var hostnames = Set<String>()
+        for pattern in matchPatterns {
+            guard let schemeEnd = pattern.range(of: "://") else { continue }
+            let afterScheme = pattern[schemeEnd.upperBound...]
+            guard let slashIndex = afterScheme.firstIndex(of: "/") else { continue }
+            let host = String(afterScheme[afterScheme.startIndex..<slashIndex])
+            if host != "*" {
+                hostnames.insert(host.replacingOccurrences(of: "*.", with: ""))
+            }
+        }
+        let sortedHostnames = hostnames.sorted()
+        guard !sortedHostnames.isEmpty else { return }
+
+        Self.logger.info("Installing page-world externally_connectable polyfill for extension \(extensionId, privacy: .public): \(sortedHostnames.joined(separator: ", "), privacy: .public)")
+
+        let hostnamesJSON = sortedHostnames.map { "\"\($0)\"" }.joined(separator: ",")
+        let escapedTargetRuntimeId = extensionId
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+
+        // PAGE-world polyfill: wraps browser/chrome runtime APIs used by externally_connectable
+        // pages and relays extension traffic via window.postMessage to nook_bridge.js (ISOLATED world).
+        let polyfillJS = """
+        (function() {
+            var _hosts = [\(hostnamesJSON)];
+            var _configuredRuntimeId = "\(escapedTargetRuntimeId)";
+            var _activeRuntimeId = _configuredRuntimeId;
+            var _pendingBridgeRuntimeId = null;
+            var _bridgeRuntimeRetargetTimer = null;
+            var h = location.hostname;
+            if (!_hosts.some(function(p) { return h === p || h.endsWith('.' + p); })) return;
+            if (window.__nookEcShimInstalled) return;
+            window.__nookEcShimInstalled = true;
+
+            console.log('[NOOK-EC] Installing externally_connectable polyfill on ' + location.href);
+
+            var bridgeReady = false;
+            var bridgeWaiters = [];
+            var bridgePorts = Object.create(null);
+            var bridgeRequestDedup = Object.create(null);
+
+            function makeEvent() {
+                var listeners = [];
+                return {
+                    addListener: function(fn) {
+                        if (typeof fn !== 'function') return;
+                        if (listeners.indexOf(fn) >= 0) return;
+                        listeners.push(fn);
+                    },
+                    removeListener: function(fn) {
+                        var idx = listeners.indexOf(fn);
+                        if (idx >= 0) listeners.splice(idx, 1);
+                    },
+                    hasListener: function(fn) {
+                        return listeners.indexOf(fn) >= 0;
+                    },
+                    dispatch: function() {
+                        var args = Array.prototype.slice.call(arguments);
+                        var snapshot = listeners.slice();
+                        for (var i = 0; i < snapshot.length; i += 1) {
+                            try {
+                                snapshot[i].apply(null, args);
+                            } catch (error) {
+                                console.error('[NOOK-EC] Listener error:', error);
+                            }
+                        }
+                    }
+                };
+            }
+
+            function markBridgeReady() {
+                if (bridgeReady) return;
+                bridgeReady = true;
+                while (bridgeWaiters.length) {
+                    try { bridgeWaiters.shift()(); } catch (_) {}
+                }
+            }
+
+            function activeRuntimeId() {
+                return _activeRuntimeId || _configuredRuntimeId;
+            }
+
+            function matchesActiveRuntimeId(runtimeId) {
+                if (!runtimeId || typeof runtimeId !== 'string') return true;
+                return runtimeId === activeRuntimeId();
+            }
+
+            function adoptBridgeRuntime(runtimeId) {
+                if (!runtimeId || typeof runtimeId !== 'string') {
+                    markBridgeReady();
+                    return;
+                }
+
+                if (runtimeId === _configuredRuntimeId || runtimeId === _activeRuntimeId) {
+                    _activeRuntimeId = runtimeId;
+                    markBridgeReady();
+                    return;
+                }
+
+                if (_activeRuntimeId !== _configuredRuntimeId) {
+                    return;
+                }
+
+                _pendingBridgeRuntimeId = runtimeId;
+                if (_bridgeRuntimeRetargetTimer !== null) return;
+
+                _bridgeRuntimeRetargetTimer = setTimeout(function() {
+                    _bridgeRuntimeRetargetTimer = null;
+                    if (bridgeReady || !_pendingBridgeRuntimeId) return;
+                    _activeRuntimeId = _pendingBridgeRuntimeId;
+                    console.warn('[NOOK-EC] Bridge runtime mismatch; retargeting to ' + _activeRuntimeId + ' (configured ' + _configuredRuntimeId + ')');
+                    markBridgeReady();
+                }, 250);
+            }
+
+            function waitForBridgeReady(timeoutMs) {
+                if (bridgeReady) return Promise.resolve();
+                return new Promise(function(resolve, reject) {
+                    var settled = false;
+                    var timer = null;
+
+                    var waiter = function() {
+                        if (settled) return;
+                        settled = true;
+                        if (timer !== null) clearTimeout(timer);
+                        resolve();
+                    };
+
+                    bridgeWaiters.push(waiter);
+
+                    timer = setTimeout(function() {
+                        if (settled) return;
+                        settled = true;
+                        var idx = bridgeWaiters.indexOf(waiter);
+                        if (idx >= 0) bridgeWaiters.splice(idx, 1);
+                        reject(new Error('Extension bridge unavailable'));
+                    }, timeoutMs);
+                });
+            }
+
+            function normalizeSendMessageArgs(argsLike) {
+                var args = Array.prototype.slice.call(argsLike);
+                var callback = null;
+
+                if (args.length && typeof args[args.length - 1] === 'function') {
+                    callback = args.pop();
+                }
+
+                var extensionId = null;
+                var message = undefined;
+                var options = undefined;
+
+                if (args.length === 1) {
+                    message = args[0];
+                } else if (args.length === 2) {
+                    if (typeof args[0] === 'string') {
+                        extensionId = args[0];
+                        message = args[1];
+                    } else {
+                        message = args[0];
+                        options = args[1];
+                    }
+                } else if (args.length >= 3) {
+                    extensionId = args[0];
+                    message = args[1];
+                    options = args[2];
+                }
+
+                return {
+                    extensionId: extensionId,
+                    message: message,
+                    options: options,
+                    callback: callback
+                };
+            }
+
+            function normalizeConnectArgs(argsLike) {
+                var args = Array.prototype.slice.call(argsLike);
+                var extensionId = null;
+                var connectInfo = {};
+
+                if (args.length === 1) {
+                    if (typeof args[0] === 'string') {
+                        extensionId = args[0];
+                    } else {
+                        connectInfo = args[0];
+                    }
+                } else if (args.length >= 2) {
+                    extensionId = args[0];
+                    connectInfo = args[1];
+                }
+
+                if (!connectInfo || typeof connectInfo !== 'object') {
+                    connectInfo = {};
+                }
+
+                return {
+                    extensionId: extensionId,
+                    connectInfo: connectInfo
+                };
+            }
+
+            function setChromeLastError(error) {
+                if (!window.chrome) window.chrome = {};
+                if (!window.chrome.runtime) window.chrome.runtime = {};
+                if (error) {
+                    window.chrome.runtime.lastError = { message: error.message || String(error) };
+                } else if (window.chrome.runtime.lastError) {
+                    try {
+                        delete window.chrome.runtime.lastError;
+                    } catch (_) {
+                        window.chrome.runtime.lastError = undefined;
+                    }
+                }
+            }
+
+            function clearChromeLastErrorAsync() {
+                setTimeout(function() { setChromeLastError(null); }, 0);
+            }
+
+            function requestViaBridge(parsed, requestType) {
+                var normalizedType = requestType || (
+                    (parsed.message && typeof parsed.message === 'object' && parsed.message.type)
+                        ? parsed.message.type
+                        : typeof parsed.message
+                );
+
+                function dedupKeyForRequest() {
+                    if (normalizedType !== 'fork') return null;
+                    var selector = parsed && parsed.message && parsed.message.payload && parsed.message.payload.selector;
+                    if (!selector || typeof selector !== 'string') return null;
+                    var runtimeKey = activeRuntimeId();
+                    if (!runtimeKey || typeof runtimeKey !== 'string') runtimeKey = '(runtime)';
+                    return 'fork:' + runtimeKey + ':' + selector;
+                }
+
+                var dedupKey = dedupKeyForRequest();
+                if (dedupKey) {
+                    var inFlight = bridgeRequestDedup[dedupKey];
+                    if (inFlight && typeof inFlight.then === 'function') {
+                        console.log('[NOOK-EC] Reusing in-flight request key=' + dedupKey);
+                        return inFlight;
+                    }
+                }
+
+                var promise = waitForBridgeReady(3000).then(function() {
+                    return new Promise(function(resolve, reject) {
+                        var callbackId = 'nook_ec_' + Math.random().toString(36).slice(2, 11);
+                        var timeoutId = null;
+                        var settled = false;
+
+                        function cleanup() {
+                            window.removeEventListener('message', handler);
+                            if (timeoutId !== null) clearTimeout(timeoutId);
+                        }
+
+                        function settleSuccess(response) {
+                            if (settled) return;
+                            settled = true;
+                            cleanup();
+                            if (normalizedType === 'fork' && response && typeof response === 'object') {
+                                console.log('[NOOK-EC] fork response ok=' + String(response.ok) + ' ext=' + (parsed.extensionId || '(none)'));
+                            }
+                            resolve(response);
+                        }
+
+                        function settleError(error) {
+                            if (settled) return;
+                            settled = true;
+                            cleanup();
+                            reject(error);
+                        }
+
+                        function handler(event) {
+                            if (event.source !== window) return;
+                            if (!event.data || event.data.type !== 'nook_ec_response') return;
+                            if (!matchesActiveRuntimeId(event.data.targetRuntimeId)) return;
+                            if (event.data.callbackId !== callbackId) return;
+
+                            if (event.data.error) {
+                                console.warn('[NOOK-EC] Response error for type=' + normalizedType + ': ' + event.data.error);
+                                settleError(new Error(event.data.error));
+                            } else {
+                                console.log('[NOOK-EC] Response success for type=' + normalizedType);
+                                settleSuccess(event.data.response);
+                            }
+                        }
+
+                        window.addEventListener('message', handler);
+                        timeoutId = setTimeout(function() {
+                            console.warn('[NOOK-EC] Timeout waiting for response type=' + normalizedType);
+                            settleError(new Error('Extension communication timeout'));
+                        }, 30000);
+
+                        console.log('[NOOK-EC] Forwarding request type=' + normalizedType + ' ext=' + (parsed.extensionId || '(none)'));
+                        window.postMessage({
+                            type: 'nook_ec_request',
+                            targetRuntimeId: activeRuntimeId(),
+                            extensionId: parsed.extensionId,
+                            message: parsed.message,
+                            options: parsed.options,
+                            callbackId: callbackId
+                        }, '*');
+                    });
+                });
+
+                if (dedupKey) {
+                    bridgeRequestDedup[dedupKey] = promise;
+                    var clearInFlight = function() {
+                        if (bridgeRequestDedup[dedupKey] === promise) {
+                            delete bridgeRequestDedup[dedupKey];
+                        }
+                    };
+                    promise.then(clearInFlight).catch(clearInFlight);
+                }
+
+                return promise;
+            }
+
+            function closeBridgePort(portId, errorMessage) {
+                var entry = bridgePorts[portId];
+                if (!entry || entry.disconnected) return;
+                entry.disconnected = true;
+                delete bridgePorts[portId];
+
+                if (errorMessage) {
+                    setChromeLastError(new Error(errorMessage));
+                    try {
+                        entry.onDisconnect.dispatch(entry.port);
+                    } finally {
+                        clearChromeLastErrorAsync();
+                    }
+                    return;
+                }
+                entry.onDisconnect.dispatch(entry.port);
+            }
+
+            function createBridgePort(parsed) {
+                var portId = 'nook_ec_port_' + Math.random().toString(36).slice(2, 11);
+                var connectInfo = parsed.connectInfo || {};
+                var onMessage = makeEvent();
+                var onDisconnect = makeEvent();
+
+                var entry = {
+                    disconnected: false,
+                    onMessage: onMessage,
+                    onDisconnect: onDisconnect,
+                    port: null
+                };
+
+                var port = {
+                    name: typeof connectInfo.name === 'string' ? connectInfo.name : '',
+                    postMessage: function(message) {
+                        if (entry.disconnected) throw new Error('Port is disconnected');
+                        window.postMessage({
+                            type: 'nook_ec_connect_post',
+                            targetRuntimeId: activeRuntimeId(),
+                            portId: portId,
+                            message: message
+                        }, '*');
+                    },
+                    disconnect: function() {
+                        if (entry.disconnected) return;
+                        window.postMessage({
+                            type: 'nook_ec_connect_close',
+                            targetRuntimeId: activeRuntimeId(),
+                            portId: portId
+                        }, '*');
+                        closeBridgePort(portId, null);
+                    },
+                    onMessage: onMessage,
+                    onDisconnect: onDisconnect
+                };
+                entry.port = port;
+                bridgePorts[portId] = entry;
+
+                waitForBridgeReady(3000).then(function() {
+                    console.log('[NOOK-EC] Opening bridge port id=' + portId + ' name=' + port.name + ' ext=' + (parsed.extensionId || '(none)'));
+                    window.postMessage({
+                        type: 'nook_ec_connect_open',
+                        targetRuntimeId: activeRuntimeId(),
+                        extensionId: parsed.extensionId,
+                        connectInfo: connectInfo,
+                        portId: portId
+                    }, '*');
+                }).catch(function(error) {
+                    var message = (error && error.message) ? error.message : String(error);
+                    console.warn('[NOOK-EC] Bridge port open failed id=' + portId + ': ' + message);
+                    closeBridgePort(portId, message);
+                });
+
+                return port;
+            }
+
+            function makeSendMessageWrapper(originalSendMessage, runtimeKind, runtimeObject) {
+                return function() {
+                    var parsed = normalizeSendMessageArgs(arguments);
+                    var requestType = (
+                        parsed.message && typeof parsed.message === 'object' && parsed.message.type
+                    ) ? parsed.message.type : typeof parsed.message;
+
+                    var shouldBridge = parsed.extensionId !== null || typeof originalSendMessage !== 'function';
+                    console.log('[NOOK-EC] sendMessage called via ' + runtimeKind + ' type=' + requestType + ' ext=' + (parsed.extensionId || '(none)') + ' mode=' + (shouldBridge ? 'bridge' : 'native'));
+
+                    var promise;
+                    if (shouldBridge) {
+                        promise = requestViaBridge(parsed, requestType);
+                    } else {
+                        try {
+                            promise = Promise.resolve(originalSendMessage.apply(runtimeObject, arguments));
+                        } catch (error) {
+                            promise = Promise.reject(error);
+                        }
+                        promise = promise.catch(function(error) {
+                            var message = (error && error.message) ? error.message : String(error);
+                            console.warn('[NOOK-EC] Native sendMessage failed via ' + runtimeKind + ', falling back to bridge: ' + message);
+                            return requestViaBridge(parsed, requestType);
+                        });
+                    }
+
+                    if (parsed.callback) {
+                        promise.then(function(response) {
+                            setChromeLastError(null);
+                            parsed.callback(response);
+                        }).catch(function(error) {
+                            setChromeLastError(error);
+                            try {
+                                parsed.callback();
+                            } finally {
+                                clearChromeLastErrorAsync();
+                            }
+                        });
+                        return;
+                    }
+
+                    return promise;
+                };
+            }
+
+            function makeConnectWrapper(originalConnect, runtimeKind, runtimeObject) {
+                return function() {
+                    var parsed = normalizeConnectArgs(arguments);
+                    var shouldBridge = parsed.extensionId !== null || typeof originalConnect !== 'function';
+                    console.log('[NOOK-EC] connect called via ' + runtimeKind + ' ext=' + (parsed.extensionId || '(none)') + ' mode=' + (shouldBridge ? 'bridge' : 'native'));
+
+                    if (shouldBridge) {
+                        return createBridgePort(parsed);
+                    }
+
+                    try {
+                        return originalConnect.apply(runtimeObject, arguments);
+                    } catch (error) {
+                        var message = (error && error.message) ? error.message : String(error);
+                        console.warn('[NOOK-EC] Native connect failed via ' + runtimeKind + ', falling back to bridge: ' + message);
+                        return createBridgePort(parsed);
+                    }
+                };
+            }
+
+            function installRuntimeShim(runtimeObject, runtimeKind) {
+                if (!runtimeObject || typeof runtimeObject !== 'object') return;
+
+                var currentSendMessage = typeof runtimeObject.sendMessage === 'function'
+                    ? runtimeObject.sendMessage
+                    : null;
+                if (runtimeObject.sendMessage !== runtimeObject.__nookEcWrappedSendMessage) {
+                    runtimeObject.__nookEcWrappedSendMessage = makeSendMessageWrapper(
+                        currentSendMessage,
+                        runtimeKind,
+                        runtimeObject
+                    );
+                    runtimeObject.sendMessage = runtimeObject.__nookEcWrappedSendMessage;
+                }
+
+                var currentConnect = typeof runtimeObject.connect === 'function'
+                    ? runtimeObject.connect
+                    : null;
+                if (runtimeObject.connect !== runtimeObject.__nookEcWrappedConnect) {
+                    runtimeObject.__nookEcWrappedConnect = makeConnectWrapper(
+                        currentConnect,
+                        runtimeKind,
+                        runtimeObject
+                    );
+                    runtimeObject.connect = runtimeObject.__nookEcWrappedConnect;
+                }
+            }
+
+            function ensureRuntimeObject(rootName) {
+                if (!window[rootName]) window[rootName] = {};
+                if (!window[rootName].runtime) window[rootName].runtime = {};
+                return window[rootName].runtime;
+            }
+
+            window.addEventListener('message', function(event) {
+                if (event.source !== window) return;
+                if (!event.data || typeof event.data.type !== 'string') return;
+                if (event.data.type === 'nook_ec_bridge_ready') {
+                    adoptBridgeRuntime(event.data.targetRuntimeId);
+                    return;
+                }
+                if (event.data.type === 'nook_ec_connect_message') {
+                    if (!matchesActiveRuntimeId(event.data.targetRuntimeId)) return;
+                    var messageEntry = bridgePorts[event.data.portId];
+                    if (!messageEntry || messageEntry.disconnected) return;
+                    messageEntry.onMessage.dispatch(event.data.message, messageEntry.port);
+                    return;
+                }
+                if (event.data.type === 'nook_ec_connect_disconnect') {
+                    if (!matchesActiveRuntimeId(event.data.targetRuntimeId)) return;
+                    closeBridgePort(event.data.portId, event.data.error || null);
+                    return;
+                }
+            });
+
+            var browserRuntime = ensureRuntimeObject('browser');
+            var chromeRuntime = ensureRuntimeObject('chrome');
+            installRuntimeShim(browserRuntime, 'browser.runtime');
+            installRuntimeShim(chromeRuntime, 'chrome.runtime');
+
+            // Some apps patch runtime methods after page load; re-apply wrappers briefly.
+            var shimAttempts = 0;
+            var shimTimer = setInterval(function() {
+                shimAttempts += 1;
+                installRuntimeShim(browserRuntime, 'browser.runtime');
+                installRuntimeShim(chromeRuntime, 'chrome.runtime');
+                if (shimAttempts >= 60) clearInterval(shimTimer);
+            }, 500);
+
+            console.log('[NOOK-EC] Polyfill ready — runtime sendMessage/connect wrapped (configured=' + _configuredRuntimeId + ')');
+        })();
+        """
+
+        let sharedConfig = BrowserConfiguration.shared.webViewConfiguration
+        let hostsSignature = "var _hosts = [\(hostnamesJSON)];"
+        let sharedUserContentController = sharedConfig.userContentController
+        let retainedScripts = sharedUserContentController.userScripts.filter { script in
+            let source = script.source
+            guard source.contains("[NOOK-EC] Installing externally_connectable polyfill on ") else {
+                return true
+            }
+            return !source.contains(hostsSignature)
+        }
+        if retainedScripts.count != sharedUserContentController.userScripts.count {
+            sharedUserContentController.removeAllUserScripts()
+            retainedScripts.forEach { sharedUserContentController.addUserScript($0) }
+            Self.logger.info("Removed stale page-world externally_connectable shim for hosts: \(sortedHostnames.joined(separator: ", "), privacy: .public)")
+        }
+
+        let pageScript = WKUserScript(
+            source: polyfillJS,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false,
+            in: .page
         )
-        print("   Controller ID: \(config.identifier?.uuidString ?? "none")")
-        let dataStoreDescription =
-            controller.configuration.defaultWebsiteDataStore.map {
-                String(describing: $0)
-            } ?? "nil"
-        print("   Data store: \(dataStoreDescription)")
+        sharedUserContentController.addUserScript(pageScript)
     }
 
     /// Verify extension storage is working properly
@@ -211,34 +772,17 @@ final class ExtensionManager: NSObject, ObservableObject,
 
         guard let dataStore = controller.configuration.defaultWebsiteDataStore
         else {
-            print("❌ Extension Storage Verification: No data store available.")
+            Self.logger.error("Extension storage verification failed: no data store available")
             return
         }
-        if let pid = profileId {
-            print(
-                "📊 Extension Storage Verification (profile=\(pid.uuidString)):"
-            )
-        } else {
-            print("📊 Extension Storage Verification:")
-        }
-        print("   Data store is persistent: \(dataStore.isPersistent)")
-        print(
-            "   Data store identifier: \(dataStore.identifier?.uuidString ?? "nil")"
-        )
+        Self.logger.debug("Verifying extension storage (profile=\(profileId?.uuidString ?? "default", privacy: .public), persistent=\(dataStore.isPersistent))")
 
         // Test storage accessibility
         dataStore.fetchDataRecords(
             ofTypes: WKWebsiteDataStore.allWebsiteDataTypes()
         ) { records in
             DispatchQueue.main.async {
-                print("   Storage records available: \(records.count)")
-                if records.count > 0 {
-                    print("   ✅ Extension storage appears to be working")
-                } else {
-                    print(
-                        "   ⚠️ No storage records found - this may be normal for new installations"
-                    )
-                }
+                Self.logger.debug("Extension storage records available: \(records.count)")
             }
         }
     }
@@ -253,9 +797,7 @@ final class ExtensionManager: NSObject, ObservableObject,
         // Use a persistent store identified by the profile UUID for deterministic mapping when available
         let store = WKWebsiteDataStore(forIdentifier: profileId)
         profileExtensionStores[profileId] = store
-        print(
-            "🔧 [ExtensionManager] Created/loaded extension data store for profile=\(profileId.uuidString) (persistent=\(store.isPersistent))"
-        )
+        Self.logger.debug("Created extension data store for profile=\(profileId.uuidString, privacy: .public), persistent=\(store.isPersistent)")
         return store
     }
 
@@ -264,11 +806,31 @@ final class ExtensionManager: NSObject, ObservableObject,
         let store = getExtensionDataStore(for: profileId)
         controller.configuration.defaultWebsiteDataStore = store
         currentProfileId = profileId
-        print(
-            "🔁 [ExtensionManager] Switched controller data store to profile=\(profileId.uuidString)"
-        )
+        Self.logger.info("Switched controller data store to profile=\(profileId.uuidString, privacy: .public)")
         // Verify storage on the new profile
         verifyExtensionStorage(profileId)
+    }
+
+    // MARK: - Extension Context Identity
+
+    /// Keep a deterministic extension origin across app relaunches.
+    /// This prevents extension local storage/session state from moving
+    /// to a fresh namespace when WebKit generates a new default context ID.
+    private func configureContextIdentity(
+        _ extensionContext: WKWebExtensionContext,
+        extensionId: String
+    ) {
+        extensionContext.uniqueIdentifier = extensionId
+
+        // Use a host-safe, deterministic base URL derived from the persisted ID.
+        // Keep the built-in `webkit-extension` scheme to avoid custom-scheme assertions.
+        let host = "ext-" + extensionId.utf8.map { String(format: "%02x", $0) }.joined()
+        if let baseURL = URL(string: "webkit-extension://\(host)") {
+            extensionContext.baseURL = baseURL
+            Self.logger.debug("Configured context identity id=\(extensionId, privacy: .public), baseURL=\(baseURL.absoluteString, privacy: .public)")
+        } else {
+            Self.logger.error("Failed to configure base URL for extension id=\(extensionId, privacy: .public)")
+        }
     }
 
     func clearExtensionData(for profileId: UUID) {
@@ -277,15 +839,7 @@ final class ExtensionManager: NSObject, ObservableObject,
             ofTypes: WKWebsiteDataStore.allWebsiteDataTypes()
         ) { records in
             Task { @MainActor in
-                if records.isEmpty {
-                    print(
-                        "🧹 [ExtensionManager] No extension data records to clear for profile=\(profileId.uuidString)"
-                    )
-                } else {
-                    print(
-                        "🧹 [ExtensionManager] Clearing \(records.count) extension data records for profile=\(profileId.uuidString)"
-                    )
-                }
+                Self.logger.info("Clearing \(records.count) extension data records for profile=\(profileId.uuidString, privacy: .public)")
                 await store.removeData(
                     ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
                     for: records
@@ -304,16 +858,15 @@ final class ExtensionManager: NSObject, ObservableObject,
     ) {
         guard let bm = browserManagerRef else { return }
 
-        print("🔧 Updating existing WebViews with extension controller...")
-
         let allTabs = bm.tabManager.pinnedTabs + bm.tabManager.tabs
         var updatedCount = 0
 
         for tab in allTabs {
-            guard let webView = tab.webView else { continue }
+            // Use assignedWebView to avoid triggering lazy initialization
+            // Only update WebViews that have been assigned to a window
+            guard let webView = tab.assignedWebView else { continue }
 
             if webView.configuration.webExtensionController !== controller {
-                print("  📝 Updating WebView for tab: \(tab.name)")
                 webView.configuration.webExtensionController = controller
                 updatedCount += 1
 
@@ -322,85 +875,33 @@ final class ExtensionManager: NSObject, ObservableObject,
             }
         }
 
-        print(
-            "✅ Updated \(updatedCount) existing WebViews with extension controller"
-        )
-
-        if updatedCount > 0 {
-            print("💡 Content script injection should now work on existing tabs")
-        }
+        Self.logger.debug("Updated \(updatedCount) existing WebViews with extension controller")
     }
 
     // MARK: - MV3 Support Methods
 
     // Note: commonPermissions array removed - now using minimalSafePermissions for better security
 
-    /// Grant only minimal safe permissions by default - all others require user consent
-    private func grantMinimalSafePermissions(
+    /// Grant all requested permissions at install time (matches Chrome behavior).
+    /// Chrome auto-grants everything in the manifest `permissions` array on install.
+    /// Only `optional_permissions` require a runtime `chrome.permissions.request()` call.
+    private func grantRequestedPermissions(
         to extensionContext: WKWebExtensionContext,
-        webExtension: WKWebExtension,
-        isExisting: Bool = false
+        webExtension: WKWebExtension
     ) {
-        let existingLabel = isExisting ? " for existing extension" : ""
-
-        // SECURITY FIX: Only grant absolutely essential permissions by default
-        // These are required for basic extension functionality and are considered safe
-
-        // Grant only basic permissions that are essential for extension operation
-        let minimalSafePermissions: Set<WKWebExtension.Permission> = [
-            .storage,  // Required for basic extension storage
-            .alarms,  // Required for basic extension functionality
-        ]
-
-        for permission in minimalSafePermissions {
-            if webExtension.requestedPermissions.contains(permission) {
-                if !isExisting
-                    || !extensionContext.currentPermissions.contains(permission)
-                {
-                    extensionContext.setPermissionStatus(
-                        .grantedExplicitly,
-                        for: permission
-                    )
-                    print(
-                        "   ✅ Granted minimal safe permission: \(permission)\(existingLabel)"
-                    )
-                }
-            }
+        for permission in webExtension.requestedPermissions {
+            extensionContext.setPermissionStatus(.grantedExplicitly, for: permission)
         }
-
-        // SECURITY FIX: Do NOT auto-grant potentially dangerous permissions
-        // These require explicit user consent:
-        // - .tabs (can access all tab data)
-        // - .activeTab (can access current tab)
-        // - .scripting (can inject scripts)
-        // - .contextMenus (can modify browser UI)
-        // - .declarativeNetRequest (can modify network requests)
-        // - .webNavigation (can monitor navigation)
-        // - .cookies (can access cookies)
-
-        print("   🔒 Potentially sensitive permissions require user consent:")
-        let sensitivePermissions = webExtension.requestedPermissions
-            .subtracting(minimalSafePermissions)
-        for permission in sensitivePermissions {
-            print("      - \(permission) (requires user approval)")
-        }
-
-        // Note: All other permissions will be handled by user consent prompts
+        Self.logger.debug("Granted requested permissions: \(webExtension.requestedPermissions.map { String(describing: $0) }.joined(separator: ", "), privacy: .public)")
     }
 
-    /// Grant common permissions and MV2 compatibility for an extension context (DEPRECATED - use grantMinimalSafePermissions)
+    /// Backward-compatible alias used by the loadInstalledExtensions path.
     private func grantCommonPermissions(
         to extensionContext: WKWebExtensionContext,
         webExtension: WKWebExtension,
         isExisting: Bool = false
     ) {
-        // This method is kept for backward compatibility but should not be used
-        // Use grantMinimalSafePermissions instead for better security
-        grantMinimalSafePermissions(
-            to: extensionContext,
-            webExtension: webExtension,
-            isExisting: isExisting
-        )
+        grantRequestedPermissions(to: extensionContext, webExtension: webExtension)
     }
 
     /// Validate MV3-specific requirements
@@ -420,7 +921,7 @@ final class ExtensionManager: NSObject, ObservableObject,
                         "MV3 service worker not found: \(serviceWorker)"
                     )
                 }
-                print("   ✅ MV3 service worker found: \(serviceWorker)")
+                Self.logger.debug("MV3 service worker found: \(serviceWorker, privacy: .public)")
             }
         }
 
@@ -428,20 +929,477 @@ final class ExtensionManager: NSObject, ObservableObject,
         if let contentScripts = manifest["content_scripts"] as? [[String: Any]]
         {
             for script in contentScripts {
-                if let world = script["world"] as? String {
-                    print("   🌍 Content script with world: \(world)")
-                    if world == "MAIN" {
-                        print(
-                            "   ⚠️  MAIN world content script - requires macOS 15.5+ for full support"
-                        )
-                    }
+                if let world = script["world"] as? String, world == "MAIN" {
+                    Self.logger.debug("MAIN world content script detected - requires macOS 15.5+ for full support")
                 }
             }
         }
 
         // Validate host_permissions vs permissions
         if let hostPermissions = manifest["host_permissions"] as? [String] {
-            print("   🏠 MV3 host_permissions: \(hostPermissions)")
+            Self.logger.debug("MV3 host_permissions: \(hostPermissions, privacy: .public)")
+        }
+    }
+
+    /// Patch manifest.json so domain-specific content scripts run in MAIN world.
+    ///
+    /// In Chrome MV3, content script fetch() uses the page's origin. In WebKit's
+    /// ISOLATED world, fetch() uses the extension's origin (webkit-extension://)
+    /// which causes CORS failures and prevents cookies from being sent. This
+    /// particularly breaks SSO/auth flows like Proton Pass's fork session handoff
+    /// where a content script needs to make authenticated requests to the page's API.
+    ///
+    /// The fix: content scripts that target a small set of specific domains (not
+    /// wildcard all-sites patterns) and don't already specify a world are patched
+    /// to run in MAIN world, where fetch() uses the page's origin and cookies.
+    private func patchManifestForWebKit(at manifestURL: URL) {
+        guard let data = try? Data(contentsOf: manifestURL),
+              var manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+
+        var changed = false
+
+        // --- Revert any previous MAIN-world patches on domain-specific content scripts ---
+        // (Earlier code incorrectly patched domain-specific scripts to MAIN world,
+        // but MAIN world content scripts lose browser.runtime access in WKWebExtension.)
+        if var contentScripts = manifest["content_scripts"] as? [[String: Any]] {
+            for i in contentScripts.indices {
+                guard let world = contentScripts[i]["world"] as? String, world == "MAIN" else { continue }
+                guard let matches = contentScripts[i]["matches"] as? [String] else { continue }
+                let jsFiles = contentScripts[i]["js"] as? [String] ?? []
+
+                // Don't touch our own bridge entry
+                if jsFiles.contains("nook_bridge.js") { continue }
+
+                // If ALL matches are domain-specific (no wildcard hosts), this was likely our patch
+                let allDomainSpecific = matches.allSatisfy { pattern in
+                    guard let schemeEnd = pattern.range(of: "://") else { return false }
+                    let afterScheme = pattern[schemeEnd.upperBound...]
+                    guard let slashIndex = afterScheme.firstIndex(of: "/") else { return false }
+                    let host = String(afterScheme[afterScheme.startIndex..<slashIndex])
+                    return host != "*" && !host.hasPrefix("*.")
+                }
+
+                if allDomainSpecific {
+                    contentScripts[i].removeValue(forKey: "world")
+                    Self.logger.info("Reverted MAIN world on [\(jsFiles.joined(separator: ", "), privacy: .public)] — restoring to ISOLATED")
+                    changed = true
+                }
+            }
+            manifest["content_scripts"] = contentScripts
+        }
+
+        // --- Add externally_connectable bridge content script ---
+        if let ec = manifest["externally_connectable"] as? [String: Any],
+           let matchPatterns = ec["matches"] as? [String], !matchPatterns.isEmpty {
+
+            var contentScripts = manifest["content_scripts"] as? [[String: Any]] ?? []
+
+            let existingBridgeIndex = contentScripts.firstIndex { entry in
+                (entry["js"] as? [String])?.contains("nook_bridge.js") == true
+            }
+
+            if let bridgeIndex = existingBridgeIndex {
+                var bridgeEntry = contentScripts[bridgeIndex]
+                let currentAllFrames = bridgeEntry["all_frames"] as? Bool ?? false
+                let currentRunAt = bridgeEntry["run_at"] as? String
+                let currentMatches = bridgeEntry["matches"] as? [String] ?? []
+
+                if currentAllFrames != true || currentRunAt != "document_start" || currentMatches != matchPatterns {
+                    bridgeEntry["all_frames"] = true
+                    bridgeEntry["run_at"] = "document_start"
+                    bridgeEntry["matches"] = matchPatterns
+                    contentScripts[bridgeIndex] = bridgeEntry
+                    manifest["content_scripts"] = contentScripts
+                    changed = true
+                    Self.logger.info("Updated existing nook_bridge.js content script entry for all-frames document_start coverage")
+                }
+            } else {
+                // Add bridge content script entry — runs in ISOLATED world (has browser.runtime)
+                let bridgeEntry: [String: Any] = [
+                    "all_frames": true,
+                    "js": ["nook_bridge.js"],
+                    "matches": matchPatterns,
+                    "run_at": "document_start"
+                ]
+                contentScripts.append(bridgeEntry)
+                manifest["content_scripts"] = contentScripts
+                changed = true
+            }
+
+            // Always refresh bridge file to keep compatibility fixes for already-installed extensions.
+            let bridgeDir = manifestURL.deletingLastPathComponent()
+            let bridgeFileURL = bridgeDir.appendingPathComponent("nook_bridge.js")
+            let bridgeJS = """
+            // Nook: externally_connectable bridge relay
+            // Runs as extension content script (ISOLATED world) with browser.runtime access.
+            // Listens for postMessage from page-world polyfill and forwards to background.
+            (function() {
+                var runtimeAPI = null;
+                try {
+                    if (typeof browser !== 'undefined' && browser.runtime) {
+                        runtimeAPI = browser.runtime;
+                    } else if (typeof chrome !== 'undefined' && chrome.runtime) {
+                        runtimeAPI = chrome.runtime;
+                    }
+                } catch (_) {}
+
+                var runtimeVersion = null;
+                try {
+                    if (runtimeAPI && runtimeAPI.getManifest) {
+                        runtimeVersion = runtimeAPI.getManifest().version || null;
+                    }
+                } catch (_) {}
+                var bridgePorts = Object.create(null);
+
+                function currentRuntimeId() {
+                    try {
+                        return runtimeAPI && runtimeAPI.id ? runtimeAPI.id : null;
+                    } catch (_) {
+                        return null;
+                    }
+                }
+
+                function isTargetedMessage(data) {
+                    if (!data || typeof data !== 'object') return false;
+                    var targetRuntimeId = data.targetRuntimeId;
+                    if (!targetRuntimeId || typeof targetRuntimeId !== 'string') return false;
+                    var runtimeId = currentRuntimeId();
+                    return !!runtimeId && targetRuntimeId === runtimeId;
+                }
+
+                function announceReady() {
+                    window.postMessage({
+                        type: 'nook_ec_bridge_ready',
+                        targetRuntimeId: currentRuntimeId()
+                    }, '*');
+                }
+
+                announceReady();
+                setTimeout(announceReady, 0);
+                setTimeout(announceReady, 100);
+                setTimeout(announceReady, 500);
+
+                function lastErrorMessage() {
+                    try {
+                        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.lastError && chrome.runtime.lastError.message) {
+                            return chrome.runtime.lastError.message;
+                        }
+                    } catch (_) {}
+                    return null;
+                }
+
+                function relaySendMessage(data) {
+                    if (!runtimeAPI || typeof runtimeAPI.sendMessage !== 'function') {
+                        window.postMessage({
+                            type: 'nook_ec_response',
+                            callbackId: data.callbackId,
+                            targetRuntimeId: currentRuntimeId(),
+                            error: 'runtime.sendMessage unavailable'
+                        }, '*');
+                        return;
+                    }
+
+                    var callbackId = data.callbackId;
+                    var message = data.message;
+                    var options = data.options;
+                    var outgoingMessage = message;
+
+                    if (outgoingMessage && typeof outgoingMessage === 'object') {
+                        // Preserve sender when provided by the page; default to page semantics.
+                        outgoingMessage = Object.assign({ sender: 'page' }, outgoingMessage);
+                        // Proton's broker enforces a version field for internal messages.
+                        if (runtimeVersion && typeof outgoingMessage.version === 'undefined') {
+                            outgoingMessage.version = runtimeVersion;
+                        }
+                    }
+
+                    var outgoingType = (
+                        outgoingMessage && typeof outgoingMessage === 'object' && outgoingMessage.type
+                    ) ? outgoingMessage.type : typeof outgoingMessage;
+                    console.log('[NOOK-EC] Relay send type=' + outgoingType + ' version=' + (
+                        outgoingMessage && typeof outgoingMessage === 'object' ? (outgoingMessage.version || '(none)') : '(n/a)'
+                    ));
+
+                    var sendPromise = new Promise(function(resolve, reject) {
+                        var result;
+                        try {
+                            if (typeof options !== 'undefined') {
+                                result = runtimeAPI.sendMessage(outgoingMessage, options);
+                            } else {
+                                result = runtimeAPI.sendMessage(outgoingMessage);
+                            }
+                        } catch (error) {
+                            reject(error);
+                            return;
+                        }
+                        if (result && typeof result.then === 'function') {
+                            result.then(resolve).catch(reject);
+                        } else {
+                            resolve(result);
+                        }
+                    });
+
+                    Promise.resolve(sendPromise).then(function(response) {
+                        console.log('[NOOK-EC] Relay success type=' + outgoingType);
+                        window.postMessage({
+                            type: 'nook_ec_response',
+                            callbackId: callbackId,
+                            targetRuntimeId: currentRuntimeId(),
+                            response: response
+                        }, '*');
+                    }).catch(function(error) {
+                        console.warn('[NOOK-EC] Relay error type=' + outgoingType + ': ' + ((error && error.message) ? error.message : String(error)));
+                        window.postMessage({
+                            type: 'nook_ec_response',
+                            callbackId: callbackId,
+                            targetRuntimeId: currentRuntimeId(),
+                            error: (error && error.message) ? error.message : String(error)
+                        }, '*');
+                    });
+                }
+
+                function relayConnectOpen(data) {
+                    var portId = data.portId;
+                    if (!portId) return;
+
+                    if (!runtimeAPI || typeof runtimeAPI.connect !== 'function') {
+                        window.postMessage({
+                            type: 'nook_ec_connect_disconnect',
+                            portId: portId,
+                            targetRuntimeId: currentRuntimeId(),
+                            error: 'runtime.connect unavailable'
+                        }, '*');
+                        return;
+                    }
+
+                    var connectInfo = data.connectInfo;
+                    if (!connectInfo || typeof connectInfo !== 'object') {
+                        connectInfo = {};
+                    }
+
+                    console.log('[NOOK-EC] Relay connect open id=' + portId + ' name=' + (connectInfo.name || '') + ' ext=' + (data.extensionId || '(none)'));
+
+                    var port;
+                    try {
+                        // Intentionally ignore external extensionId and connect internally.
+                        port = runtimeAPI.connect(connectInfo);
+                    } catch (error) {
+                        window.postMessage({
+                            type: 'nook_ec_connect_disconnect',
+                            portId: portId,
+                            targetRuntimeId: currentRuntimeId(),
+                            error: (error && error.message) ? error.message : String(error)
+                        }, '*');
+                        return;
+                    }
+
+                    bridgePorts[portId] = port;
+                    port.onMessage.addListener(function(message) {
+                        window.postMessage({
+                            type: 'nook_ec_connect_message',
+                            portId: portId,
+                            targetRuntimeId: currentRuntimeId(),
+                            message: message
+                        }, '*');
+                    });
+                    port.onDisconnect.addListener(function() {
+                        var error = lastErrorMessage();
+                        delete bridgePorts[portId];
+                        console.log('[NOOK-EC] Relay connect disconnect id=' + portId + (error ? (' error=' + error) : ''));
+                        window.postMessage({
+                            type: 'nook_ec_connect_disconnect',
+                            portId: portId,
+                            targetRuntimeId: currentRuntimeId(),
+                            error: error
+                        }, '*');
+                    });
+
+                    window.postMessage({
+                        type: 'nook_ec_connect_opened',
+                        portId: portId,
+                        targetRuntimeId: currentRuntimeId()
+                    }, '*');
+                }
+
+                function relayConnectPost(data) {
+                    var port = bridgePorts[data.portId];
+                    if (!port) return;
+                    try {
+                        port.postMessage(data.message);
+                    } catch (error) {
+                        delete bridgePorts[data.portId];
+                        window.postMessage({
+                            type: 'nook_ec_connect_disconnect',
+                            portId: data.portId,
+                            targetRuntimeId: currentRuntimeId(),
+                            error: (error && error.message) ? error.message : String(error)
+                        }, '*');
+                    }
+                }
+
+                function relayConnectClose(data) {
+                    var portId = data.portId;
+                    var port = bridgePorts[portId];
+                    if (!port) return;
+                    delete bridgePorts[portId];
+                    try {
+                        port.disconnect();
+                    } catch (_) {}
+                    window.postMessage({
+                        type: 'nook_ec_connect_disconnect',
+                        portId: portId,
+                        targetRuntimeId: currentRuntimeId(),
+                        error: null
+                    }, '*');
+                }
+
+                window.addEventListener('message', function(event) {
+                    if (event.source !== window) return;
+                    if (!event.data || typeof event.data.type !== 'string') return;
+                    if (event.data.type === 'nook_ec_request') {
+                        if (!isTargetedMessage(event.data)) return;
+                        relaySendMessage(event.data);
+                        return;
+                    }
+                    if (event.data.type === 'nook_ec_connect_open') {
+                        if (!isTargetedMessage(event.data)) return;
+                        relayConnectOpen(event.data);
+                        return;
+                    }
+                    if (event.data.type === 'nook_ec_connect_post') {
+                        if (!isTargetedMessage(event.data)) return;
+                        relayConnectPost(event.data);
+                        return;
+                    }
+                    if (event.data.type === 'nook_ec_connect_close') {
+                        if (!isTargetedMessage(event.data)) return;
+                        relayConnectClose(event.data);
+                        return;
+                    }
+                });
+            })();
+            """
+
+            let existingBridgeJS = try? String(contentsOf: bridgeFileURL, encoding: .utf8)
+            if existingBridgeJS != bridgeJS {
+                try? bridgeJS.write(to: bridgeFileURL, atomically: true, encoding: .utf8)
+                Self.logger.info("Updated nook_bridge.js for externally_connectable bridge compatibility")
+                changed = true
+            }
+
+            if existingBridgeIndex == nil {
+                Self.logger.info("Created nook_bridge.js and registered in manifest for externally_connectable bridge")
+            }
+        }
+
+        // --- Ensure MV2 extensions have "scripting" permission ---
+        // WKWebExtension exposes chrome.scripting for MV2 extensions. Some MV2 extensions
+        // (like Bitwarden) detect chrome.scripting availability and prefer it over the older
+        // chrome.tabs.executeScript() API. If the manifest lacks "scripting", the calls fail
+        // silently and dynamic script injection (e.g. inline autofill overlay) never runs.
+        let manifestVersion = manifest["manifest_version"] as? Int ?? 3
+        if manifestVersion == 2 {
+            var permissions = manifest["permissions"] as? [String] ?? []
+            if !permissions.contains("scripting") {
+                permissions.append("scripting")
+                manifest["permissions"] = permissions
+                changed = true
+                Self.logger.info("patchManifestForWebKit: added 'scripting' permission for MV2 extension")
+            }
+        }
+
+        // --- Add Bitwarden iframe message bridge for inline menu height ---
+        // Bitwarden's inline autofill menu uses an iframe that sends height updates via
+        // parent.postMessage(). In WKWebExtension, content scripts run in an isolated world
+        // and don't receive these messages. We inject a MAIN-world script that forwards
+        // iframe messages to the isolated content script.
+        let extensionId = manifestURL.deletingLastPathComponent().lastPathComponent
+        let isBitwarden = (manifest["name"] as? String)?.contains("Bitwarden") == true ||
+                          extensionId == "9c120cf8-9b3a-468c-9f1f-a37f29bd519c"
+        if isBitwarden {
+            var contentScripts = manifest["content_scripts"] as? [[String: Any]] ?? []
+            let bridgeExists = contentScripts.contains { entry in
+                (entry["js"] as? [String])?.contains("nook_iframe_bridge.js") == true
+            }
+            if !bridgeExists {
+                let iframeBridgeEntry: [String: Any] = [
+                    "all_frames": true,
+                    "js": ["nook_iframe_bridge.js"],
+                    "matches": ["<all_urls>"],
+                    "run_at": "document_start",
+                    "world": "MAIN"
+                ]
+                contentScripts.append(iframeBridgeEntry)
+                manifest["content_scripts"] = contentScripts
+                changed = true
+                Self.logger.info("patchManifestForWebKit: added nook_iframe_bridge.js for Bitwarden iframe message forwarding")
+            }
+
+            // Write the bridge file
+            let bridgeDir = manifestURL.deletingLastPathComponent()
+            let bridgeFileURL = bridgeDir.appendingPathComponent("nook_iframe_bridge.js")
+            let bridgeJS = """
+            // Nook: Bitwarden iframe message bridge
+            // Runs in MAIN world to receive iframe postMessages and update iframe styles directly.
+            (function() {
+                // Find Bitwarden's autofill inline menu iframe and update its height
+                function findBitwardenIframe() {
+                    // The iframe is injected into a shadow DOM by Bitwarden's content script
+                    // Look for iframes with webkit-extension:// src containing "overlay/menu"
+                    var iframes = document.querySelectorAll('iframe');
+                    for (var i = 0; i < iframes.length; i++) {
+                        var iframe = iframes[i];
+                        if (iframe.src && iframe.src.includes('overlay/menu') && iframe.src.includes('webkit-extension')) {
+                            return iframe;
+                        }
+                    }
+                    // Also check shadow DOM elements
+                    var allElements = document.querySelectorAll('*');
+                    for (var j = 0; j < allElements.length; j++) {
+                        var el = allElements[j];
+                        if (el.shadowRoot) {
+                            var shadowIframes = el.shadowRoot.querySelectorAll('iframe');
+                            for (var k = 0; k < shadowIframes.length; k++) {
+                                var sIframe = shadowIframes[k];
+                                if (sIframe.src && sIframe.src.includes('overlay/menu') && sIframe.src.includes('webkit-extension')) {
+                                    return sIframe;
+                                }
+                            }
+                        }
+                    }
+                    return null;
+                }
+
+                window.addEventListener('message', function(event) {
+                    var data = event.data;
+                    if (!data || typeof data !== 'object') return;
+                    if (!data.command) return;
+
+                    // Handle height update from iframe
+                    if (data.command === 'updateAutofillInlineMenuListHeight' && data.styles && data.styles.height) {
+                        var iframe = findBitwardenIframe();
+                        if (iframe) {
+                            iframe.style.height = data.styles.height;
+                            iframe.style.opacity = '1';
+                            iframe.style.display = 'block';
+                        }
+                    }
+                });
+            })();
+            """
+            let existingBridgeJS = try? String(contentsOf: bridgeFileURL, encoding: .utf8)
+            if existingBridgeJS != bridgeJS {
+                try? bridgeJS.write(to: bridgeFileURL, atomically: true, encoding: .utf8)
+                Self.logger.info("Updated nook_iframe_bridge.js for Bitwarden iframe message forwarding")
+                changed = true
+            }
+        }
+
+        if changed {
+            if let updatedData = try? JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]) {
+                try? updatedData.write(to: manifestURL)
+            }
         }
     }
 
@@ -453,20 +1411,18 @@ final class ExtensionManager: NSObject, ObservableObject,
     ) async throws {
         // MV3: Service worker background handling
         if webExtension.hasBackgroundContent {
-            print("   🔧 MV3 service worker background detected")
+            Self.logger.debug("MV3 service worker background detected")
         }
 
         // MV3: Enhanced content script injection support
         if webExtension.hasInjectedContent {
-            print(
-                "   💉 MV3 content scripts detected - ensuring MAIN/ISOLATED world support"
-            )
+            Self.logger.debug("MV3 content scripts detected - ensuring MAIN/ISOLATED world support")
         }
 
         // MV3: Action popup validation
         if let action = manifest["action"] as? [String: Any] {
             if let popup = action["default_popup"] as? String {
-                print("   🔧 MV3 action popup: \(popup)")
+                Self.logger.debug("MV3 action popup: \(popup, privacy: .public)")
             }
         }
     }
@@ -521,9 +1477,13 @@ final class ExtensionManager: NSObject, ObservableObject,
         let tempId = UUID().uuidString
         let tempDir = extensionsDir.appendingPathComponent("temp_\(tempId)")
 
-        // Handle ZIP files and directories
-        if sourceURL.pathExtension.lowercased() == "zip" {
+        let ext = sourceURL.pathExtension.lowercased()
+        if ext == "zip" {
             try await extractZip(from: sourceURL, to: tempDir)
+        } else if ext == "appex" || ext == "app" {
+            // Safari Web Extension bundle — resolve and copy web resources
+            let resourcesDir = try resolveSafariExtensionResources(at: sourceURL)
+            try FileManager.default.copyItem(at: resourcesDir, to: tempDir)
         } else {
             try FileManager.default.copyItem(at: sourceURL, to: tempDir)
         }
@@ -534,7 +1494,7 @@ final class ExtensionManager: NSObject, ObservableObject,
 
         // MV3 Validation: Ensure proper manifest version support
         if let manifestVersion = manifest["manifest_version"] as? Int {
-            print("ExtensionManager: Installing MV\(manifestVersion) extension")
+            Self.logger.info("Installing MV\(manifestVersion) extension")
             if manifestVersion == 3 {
                 try validateMV3Requirements(
                     manifest: manifest,
@@ -543,106 +1503,69 @@ final class ExtensionManager: NSObject, ObservableObject,
             }
         }
 
-        // STEP 2: Create WKWebExtension to get its uniqueIdentifier
-        print("🔧 [ExtensionManager] Initializing WKWebExtension...")
-        print("   Temp resource base URL: \(tempDir.path)")
-        print(
-            "   Manifest version: \(manifest["manifest_version"] ?? "unknown")"
-        )
+        // Patch domain-specific content scripts to MAIN world for WebKit fetch compatibility
+        patchManifestForWebKit(at: manifestURL)
 
-        let webExtension = try await WKWebExtension(
-            resourceBaseURL: tempDir
-        )
-        let extensionContext = WKWebExtensionContext(for: webExtension)
-        
-        // CRITICAL: Use WebKit's uniqueIdentifier as the extension ID
-        let extensionId = extensionContext.uniqueIdentifier
+        // STEP 2: Create a temporary WKWebExtension just to get the uniqueIdentifier
+        Self.logger.debug("Initializing WKWebExtension from \(tempDir.path, privacy: .public)")
+
+        let tempExtension = try await WKWebExtension(resourceBaseURL: tempDir)
+        let tempContext = WKWebExtensionContext(for: tempExtension)
+        let extensionId = tempContext.uniqueIdentifier
         let finalDestinationDir = extensionsDir.appendingPathComponent(extensionId)
 
-        print("✅ WKWebExtension created successfully")
-        print("   Display name: \(webExtension.displayName ?? "Unknown")")
-        print("   Version: \(webExtension.version ?? "Unknown")")
-        print("   🔑 Unique ID (from WebKit): \(extensionId)")
-        
-        // STEP 3: Move from temp directory to final directory with WebKit's UUID
-        // Remove existing if present (for reinstalls)
+        Self.logger.info("Extension ID: \(extensionId, privacy: .public), name: \(tempExtension.displayName ?? "Unknown", privacy: .public)")
+
+        // STEP 3: Move files to final directory named after the extension ID
         if FileManager.default.fileExists(atPath: finalDestinationDir.path) {
             try FileManager.default.removeItem(at: finalDestinationDir)
         }
         try FileManager.default.moveItem(at: tempDir, to: finalDestinationDir)
-        
-        print("📦 Moved extension to final location: \(finalDestinationDir.path)")
-        print("✓ Verified: webkit-extension://\(extensionId)/ will map to \(finalDestinationDir.path)")
 
-        // MV3: Enhanced permission validation and service worker support
-        if let manifestVersion = manifest["manifest_version"] as? Int,
-            manifestVersion == 3
-        {
-            try await configureMV3Extension(
-                webExtension: webExtension,
-                context: extensionContext,
-                manifest: manifest
-            )
+        // STEP 4: Re-create WKWebExtension from the FINAL location so the
+        // resource base URL points to where the files actually live. This is
+        // critical — the service worker, popup HTML, and all resources are
+        // loaded from this path at runtime.
+        let webExtension = try await WKWebExtension(resourceBaseURL: finalDestinationDir)
+        let extensionContext = WKWebExtensionContext(for: webExtension)
+        configureContextIdentity(extensionContext, extensionId: extensionId)
+
+        Self.logger.info("WKWebExtension created from final path: \(finalDestinationDir.path, privacy: .public)")
+        Self.logger.debug("Requested permissions: \(webExtension.requestedPermissions.map { String(describing: $0) }.joined(separator: ", "), privacy: .public)")
+
+        // Grant ALL permissions and match patterns at install time (Chrome behavior).
+        // allRequestedMatchPatterns includes content_scripts patterns, not just host_permissions.
+        for p in webExtension.requestedPermissions {
+            extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
+        }
+        for m in webExtension.allRequestedMatchPatterns {
+            extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
         }
 
-        // Debug extension details and permissions
-        print(
-            "ExtensionManager: Installing extension '\(webExtension.displayName ?? "Unknown")'"
-        )
-        print("   Version: \(webExtension.version ?? "Unknown")")
-        print("   Requested permissions: \(webExtension.requestedPermissions)")
-        print(
-            "   Requested match patterns: \(webExtension.requestedPermissionMatchPatterns)"
-        )
+        // Enable Web Inspector for extension pages (background, popup)
+        extensionContext.isInspectable = true
 
-        // SECURITY FIX: Only grant minimal safe permissions by default
-        // All other permissions require explicit user consent
-        grantMinimalSafePermissions(
-            to: extensionContext,
-            webExtension: webExtension
-        )
-
-        // SECURITY CHANGE: Auto-grant host permissions to match Chrome behavior
-        print("   🔓 Auto-granting host permissions (Chrome-like behavior)")
-        for matchPattern in webExtension.requestedPermissionMatchPatterns {
-            extensionContext.setPermissionStatus(WKWebExtensionContext.PermissionStatus.grantedExplicitly, for: matchPattern)
-        }
-        
-        // Also auto-grant optional match patterns if they are requested
-        for matchPattern in webExtension.optionalPermissionMatchPatterns {
-            extensionContext.setPermissionStatus(WKWebExtensionContext.PermissionStatus.grantedExplicitly, for: matchPattern)
-        }
-
-        // Store context
+        // Store context and load into controller
         extensionContexts[extensionId] = extensionContext
 
-        // Load with native controller
+        // Set up externally_connectable bridge BEFORE loading background
+        setupExternallyConnectableBridge(
+            for: extensionContext,
+            extensionId: extensionId,
+            packagePath: finalDestinationDir.path
+        )
+
         try extensionController?.load(extensionContext)
 
-        // Debug: Check if this is Dark Reader and log additional info
-        if webExtension.displayName?.lowercased().contains("dark") == true
-            || webExtension.displayName?.lowercased().contains("reader") == true
-        {
-            print("🌙 DARK READER DETECTED - Adding comprehensive API debugging")
-            print(
-                "   Has background content: \(webExtension.hasBackgroundContent)"
-            )
-            print("   Has injected content: \(webExtension.hasInjectedContent)")
-            print(
-                "   Current permissions after loading: \(extensionContext.currentPermissions)"
-            )
-
-            // Test if Dark Reader can access current tab URL
-            if let windowAdapter = windowAdapter,
-                let activeTab = windowAdapter.activeTab(for: extensionContext),
-                let url = activeTab.url?(for: extensionContext)
-            {
-                print("   🔍 Dark Reader can see active tab URL: \(url)")
-                let hasAccess = extensionContext.hasAccess(to: url)
-                print("   🔐 Has access to current URL: \(hasAccess)")
+        // Start the background service worker so it can handle
+        // messages from popup and content scripts.
+        extensionContext.loadBackgroundContent { [weak self] error in
+            if let error {
+                Self.logger.error("Background load failed for new extension: \(error.localizedDescription, privacy: .public)")
+            } else {
+                Self.logger.info("Background content loaded for new extension")
+                self?.probeBackgroundHealth(for: extensionContext, name: "new extension")
             }
-
-            // WKWebExtension automatically provides Chrome APIs - no manual bridging needed
         }
 
         func getLocaleText(key: String) -> String? {
@@ -669,10 +1592,26 @@ final class ExtensionManager: NSObject, ObservableObject,
                         at: localesDirectory,
                         includingPropertiesForKeys: nil
                     )
-                    for item in items {
-                        // TODO: Get user locale
-                        if item.lastPathComponent.hasPrefix("en") {
-                            pathToDirectory = item
+
+                    // Build a priority list from the user's current locale
+                    var localeCandidates: [String] = []
+                    let current = Locale.current
+                    if let langCode = current.language.languageCode?.identifier {
+                        if let regionCode = current.language.region?.identifier {
+                            // Full locale with underscore and hyphen variants (e.g. pt_BR, pt-BR)
+                            localeCandidates.append("\(langCode)_\(regionCode)")
+                            localeCandidates.append("\(langCode)-\(regionCode)")
+                        }
+                        // Language-only (e.g. pt)
+                        localeCandidates.append(langCode)
+                    }
+                    // Always fall back to English
+                    localeCandidates.append("en")
+
+                    // Case-insensitive matching against available locale directories
+                    for candidate in localeCandidates {
+                        if let match = items.first(where: { $0.lastPathComponent.caseInsensitiveCompare(candidate) == .orderedSame }) {
+                            pathToDirectory = match
                             break
                         }
                     }
@@ -733,7 +1672,7 @@ final class ExtensionManager: NSObject, ObservableObject,
         // Create extension entity for persistence
         let entity = ExtensionEntity(
             id: extensionId,
-            name: manifest["name"] as? String ?? "Unknown Extension",
+            name: getLocaleText(key: "name") ?? manifest["name"] as? String ?? "Unknown Extension",
             version: manifest["version"] as? String ?? "1.0",
             manifestVersion: manifest["manifest_version"] as? Int ?? 3,
             extensionDescription: getLocaleText(key: "description") ?? "",
@@ -750,93 +1689,12 @@ final class ExtensionManager: NSObject, ObservableObject,
             from: entity,
             manifest: manifest
         )
-        print(
-            "ExtensionManager: Successfully installed extension '\(installedExtension.name)' with native WKWebExtension"
-        )
+        Self.logger.info("Successfully installed extension '\(installedExtension.name, privacy: .public)'")
 
-        // SECURITY FIX: Always prompt for permissions that require user consent
-        if #available(macOS 15.5, *),
-            let displayName = extensionContext.webExtension.displayName
-        {
-            let requestedPermissions = extensionContext.webExtension
-                .requestedPermissions
-            let optionalPermissions = extensionContext.webExtension
-                .optionalPermissions
-            let requestedMatches = extensionContext.webExtension
-                .requestedPermissionMatchPatterns
-            let optionalMatches = extensionContext.webExtension
-                .optionalPermissionMatchPatterns
-
-            // Filter out permissions that were already granted as minimal safe permissions
-            let minimalSafePermissions: Set<WKWebExtension.Permission> = [
-                .storage, .alarms,
-            ]
-            let permissionsNeedingConsent = requestedPermissions.subtracting(
-                minimalSafePermissions
-            )
-
-            // Always show permission prompt if there are any permissions or host patterns that need consent
-            if !permissionsNeedingConsent.isEmpty || !requestedMatches.isEmpty
-                || !optionalPermissions.isEmpty || !optionalMatches.isEmpty
-            {
-
-                self.presentPermissionPrompt(
-                    requestedPermissions: permissionsNeedingConsent,
-                    optionalPermissions: optionalPermissions,
-                    requestedMatches: requestedMatches,
-                    optionalMatches: optionalMatches,
-                    extensionDisplayName: displayName,
-                    onDecision: { grantedPerms, grantedMatches in
-                        // Apply permission decisions
-                        for p in permissionsNeedingConsent.union(
-                            optionalPermissions
-                        ) {
-                            extensionContext.setPermissionStatus(
-                                grantedPerms.contains(p)
-                                    ? .grantedExplicitly : .deniedExplicitly,
-                                for: p
-                            )
-                        }
-                        for m in requestedMatches.union(optionalMatches) {
-                            extensionContext.setPermissionStatus(
-                                grantedMatches.contains(m)
-                                    ? .grantedExplicitly : .deniedExplicitly,
-                                for: m
-                            )
-                        }
-                        print("   ✅ User granted permissions: \(grantedPerms)")
-                        print(
-                            "   ✅ User granted host patterns: \(grantedMatches)"
-                        )
-                    },
-                    onCancel: {
-                        // SECURITY FIX: Default deny all sensitive permissions if user cancels
-                        for p in permissionsNeedingConsent {
-                            extensionContext.setPermissionStatus(
-                                .deniedExplicitly,
-                                for: p
-                            )
-                        }
-                        for m in requestedMatches {
-                            extensionContext.setPermissionStatus(
-                                .deniedExplicitly,
-                                for: m
-                            )
-                        }
-                        print(
-                            "   ❌ User denied permissions - extension installed with minimal permissions only"
-                        )
-                    },
-                    extensionLogo: extensionContext.webExtension.icon(
-                        for: .init(width: 64, height: 64)
-                    ) ?? NSImage()
-                )
-            } else {
-                print(
-                    "   ✅ Extension only requests minimal safe permissions - no prompt needed"
-                )
-            }
-        }
+        // All requested permissions and host patterns were already granted above
+        // (matching Chrome behavior — install = consent). Optional permissions will
+        // be handled at runtime via chrome.permissions.request() and the
+        // promptForPermissions delegate.
 
         return installedExtension
     }
@@ -856,6 +1714,47 @@ final class ExtensionManager: NSObject, ObservableObject,
                 "Failed to extract ZIP file"
             )
         }
+    }
+
+    /// Resolve the web extension resources directory from a Safari .appex or .app bundle.
+    /// - .appex: look for `Contents/Resources/manifest.json`
+    /// - .app: find the first `.appex` inside `Contents/PlugIns/` that contains web extension resources
+    private func resolveSafariExtensionResources(at bundleURL: URL) throws -> URL {
+        let ext = bundleURL.pathExtension.lowercased()
+
+        if ext == "appex" {
+            let resourcesDir = bundleURL.appendingPathComponent("Contents/Resources")
+            let manifest = resourcesDir.appendingPathComponent("manifest.json")
+            if FileManager.default.fileExists(atPath: manifest.path) {
+                Self.logger.info("Found Safari extension resources at \(resourcesDir.path, privacy: .public)")
+                return resourcesDir
+            }
+            throw ExtensionError.installationFailed(
+                "No manifest.json found in .appex bundle at Contents/Resources"
+            )
+        }
+
+        if ext == "app" {
+            // Search PlugIns directory for .appex bundles containing web extension resources
+            let plugInsDir = bundleURL.appendingPathComponent("Contents/PlugIns")
+            if let items = try? FileManager.default.contentsOfDirectory(
+                at: plugInsDir, includingPropertiesForKeys: nil
+            ) {
+                for item in items where item.pathExtension.lowercased() == "appex" {
+                    let resourcesDir = item.appendingPathComponent("Contents/Resources")
+                    let manifest = resourcesDir.appendingPathComponent("manifest.json")
+                    if FileManager.default.fileExists(atPath: manifest.path) {
+                        Self.logger.info("Found Safari extension in \(item.lastPathComponent): \(resourcesDir.path, privacy: .public)")
+                        return resourcesDir
+                    }
+                }
+            }
+            throw ExtensionError.installationFailed(
+                "No Safari Web Extension found in app bundle. Check Contents/PlugIns/ for .appex with manifest.json"
+            )
+        }
+
+        throw ExtensionError.installationFailed("Unsupported bundle format: .\(ext)")
     }
 
     private func findExtensionIcon(in directory: URL, manifest: [String: Any])
@@ -893,10 +1792,15 @@ final class ExtensionManager: NSObject, ObservableObject,
         do {
             try extensionController?.load(context)
             updateExtensionEnabled(extensionId, enabled: true)
+
+            // Start the background service worker
+            context.loadBackgroundContent { error in
+                if let error {
+                    Self.logger.error("Background load failed on enable: \(error.localizedDescription, privacy: .public)")
+                }
+            }
         } catch {
-            print(
-                "ExtensionManager: Failed to enable extension: \(error.localizedDescription)"
-            )
+            Self.logger.error("Failed to enable extension: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -907,34 +1811,23 @@ final class ExtensionManager: NSObject, ObservableObject,
             try extensionController?.unload(context)
             updateExtensionEnabled(extensionId, enabled: false)
         } catch {
-            print(
-                "ExtensionManager: Failed to disable extension: \(error.localizedDescription)"
-            )
+            Self.logger.error("Failed to disable extension: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     /// Disable all extensions (used when experimental extension support is disabled)
     func disableAllExtensions() {
-        print("🔌 [ExtensionManager] Disabling all extensions...")
-
         let enabledExtensions = installedExtensions.filter { $0.isEnabled }
 
         for ext in enabledExtensions {
             disableExtension(ext.id)
-            print("   Disabled: \(ext.name)")
         }
 
-        print(
-            "🔌 [ExtensionManager] Disabled \(enabledExtensions.count) extensions"
-        )
+        Self.logger.info("Disabled \(enabledExtensions.count) extensions")
     }
 
     /// Enable all previously enabled extensions (used when experimental extension support is re-enabled)
     func enableAllExtensions() {
-        print(
-            "🔌 [ExtensionManager] Re-enabling previously enabled extensions..."
-        )
-
         let disabledExtensions = installedExtensions.filter { !$0.isEnabled }
 
         for ext in disabledExtensions {
@@ -948,14 +1841,13 @@ final class ExtensionManager: NSObject, ObservableObject,
 
                 if let entity = entities.first, entity.isEnabled {
                     enableExtension(ext.id)
-                    print("   Re-enabled: \(ext.name)")
                 }
             } catch {
-                print("   Failed to check extension \(ext.name): \(error)")
+                Self.logger.error("Failed to check extension \(ext.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
 
-        print("🔌 [ExtensionManager] Re-enabled extensions complete")
+        Self.logger.info("Re-enabled extensions complete")
     }
 
     func uninstallExtension(_ extensionId: String) {
@@ -963,9 +1855,7 @@ final class ExtensionManager: NSObject, ObservableObject,
             do {
                 try extensionController?.unload(context)
             } catch {
-                print(
-                    "ExtensionManager: Failed to unload extension context: \(error.localizedDescription)"
-                )
+                Self.logger.error("Failed to unload extension context: \(error.localizedDescription, privacy: .public)")
             }
             extensionContexts.removeValue(forKey: extensionId)
         }
@@ -988,7 +1878,7 @@ final class ExtensionManager: NSObject, ObservableObject,
 
             installedExtensions.removeAll { $0.id == extensionId }
         } catch {
-            print("ExtensionManager: Failed to uninstall extension: \(error)")
+            Self.logger.error("Failed to uninstall extension: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -1016,10 +1906,98 @@ final class ExtensionManager: NSObject, ObservableObject,
                 }
             }
         } catch {
-            print(
-                "ExtensionManager: Failed to update extension enabled state: \(error)"
-            )
+            Self.logger.error("Failed to update extension enabled state: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    // MARK: - Safari Extension Discovery
+
+    /// A Safari Web Extension found on the system
+    struct SafariExtensionInfo: Identifiable {
+        let id: String           // bundle identifier
+        let name: String         // display name
+        let appPath: URL         // path to the parent .app
+        let appexPath: URL       // path to the .appex bundle
+        let resourcesPath: URL   // path to Contents/Resources with manifest.json
+    }
+
+    /// Discover Safari Web Extensions installed on this Mac by scanning application
+    /// bundles for .appex plugins that contain a manifest.json (web extension resources).
+    func discoverSafariExtensions() async -> [SafariExtensionInfo] {
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var results: [SafariExtensionInfo] = []
+                let fm = FileManager.default
+
+                // Scan both system and user Applications directories
+                let searchDirs: [URL] = [
+                    URL(fileURLWithPath: "/Applications"),
+                    fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
+                ]
+
+                for searchDir in searchDirs {
+                    guard let apps = try? fm.contentsOfDirectory(
+                        at: searchDir,
+                        includingPropertiesForKeys: nil,
+                        options: [.skipsHiddenFiles]
+                    ) else { continue }
+
+                    for appURL in apps where appURL.pathExtension == "app" {
+                        let plugInsDir = appURL.appendingPathComponent("Contents/PlugIns")
+                        guard let plugins = try? fm.contentsOfDirectory(
+                            at: plugInsDir,
+                            includingPropertiesForKeys: nil
+                        ) else { continue }
+
+                        for pluginURL in plugins where pluginURL.pathExtension == "appex" {
+                            // Check if this appex is a Safari web extension by looking for
+                            // both the extension point identifier and a manifest.json
+                            let infoPlist = pluginURL.appendingPathComponent("Contents/Info.plist")
+                            if let plistData = try? Data(contentsOf: infoPlist),
+                               let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any],
+                               let nsExt = plist["NSExtension"] as? [String: Any],
+                               let pointId = nsExt["NSExtensionPointIdentifier"] as? String,
+                               pointId == "com.apple.Safari.web-extension" {
+                                // Confirmed Safari web extension — check for manifest.json
+                            } else {
+                                continue
+                            }
+
+                            let resourcesDir = pluginURL.appendingPathComponent("Contents/Resources")
+                            let manifestPath = resourcesDir.appendingPathComponent("manifest.json")
+                            guard fm.fileExists(atPath: manifestPath.path) else { continue }
+
+                            // Read extension name from manifest
+                            var extName = appURL.deletingPathExtension().lastPathComponent
+                            if let data = try? Data(contentsOf: manifestPath),
+                               let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                               let name = manifest["name"] as? String,
+                               !name.hasPrefix("__MSG_") {
+                                extName = name
+                            }
+
+                            // Get bundle identifier from Info.plist
+                            let bundleId = Bundle(url: pluginURL)?.bundleIdentifier ?? pluginURL.lastPathComponent
+
+                            results.append(SafariExtensionInfo(
+                                id: bundleId,
+                                name: extName,
+                                appPath: appURL,
+                                appexPath: pluginURL,
+                                resourcesPath: resourcesDir
+                            ))
+                        }
+                    }
+                }
+
+                continuation.resume(returning: results)
+            }
+        }
+    }
+
+    /// Install a discovered Safari extension by its resources path
+    func installSafariExtension(_ info: SafariExtensionInfo, completionHandler: @escaping (Result<InstalledExtension, ExtensionError>) -> Void) {
+        installExtension(from: info.appexPath, completionHandler: completionHandler)
     }
 
     // MARK: - File Picker
@@ -1027,21 +2005,24 @@ final class ExtensionManager: NSObject, ObservableObject,
     func showExtensionInstallDialog() {
         let openPanel = NSOpenPanel()
         openPanel.title = "Install Extension"
-        openPanel.message = "Select an extension folder or ZIP file to install"
+        openPanel.message = "Select an extension folder, ZIP file, or Safari extension (.app/.appex)"
         openPanel.canChooseFiles = true
         openPanel.canChooseDirectories = true
         openPanel.allowsMultipleSelection = false
-        openPanel.allowedContentTypes = [.zip, .directory]
+        openPanel.allowedContentTypes = [
+            .zip,
+            .directory,
+            .application,
+            .applicationExtension,
+        ]
 
         if openPanel.runModal() == .OK, let url = openPanel.url {
             installExtension(from: url) { result in
                 switch result {
                 case .success(let ext):
-                    print("Successfully installed extension: \(ext.name)")
+                    Self.logger.info("Successfully installed extension: \(ext.name, privacy: .public)")
                 case .failure(let error):
-                    print(
-                        "Failed to install extension: \(error.localizedDescription)"
-                    )
+                    Self.logger.error("Failed to install extension: \(error.localizedDescription, privacy: .public)")
                     self.showErrorAlert(error)
                 }
             }
@@ -1060,232 +2041,130 @@ final class ExtensionManager: NSObject, ObservableObject,
     // MARK: - Persistence
 
     private func loadInstalledExtensions() {
+        let entities: [ExtensionEntity]
         do {
-            let entities = try self.context.fetch(
-                FetchDescriptor<ExtensionEntity>()
-            )
-            var loadedExtensions: [InstalledExtension] = []
+            entities = try self.context.fetch(FetchDescriptor<ExtensionEntity>())
+        } catch {
+            Self.logger.error("Failed to fetch extensions: \(error.localizedDescription, privacy: .public)")
+            self.extensionsLoaded = true
+            return
+        }
 
-            for entity in entities {
-                let manifestURL = URL(fileURLWithPath: entity.packagePath)
-                    .appendingPathComponent("manifest.json")
+        var loadedExtensions: [InstalledExtension] = []
+        var enabledEntities: [(ExtensionEntity, [String: Any])] = []
 
-                do {
-                    let manifest = try ExtensionUtils.validateManifest(
-                        at: manifestURL
-                    )
-                    let installedExtension = InstalledExtension(
-                        from: entity,
-                        manifest: manifest
-                    )
-                    loadedExtensions.append(installedExtension)
+        for entity in entities {
+            let manifestURL = URL(fileURLWithPath: entity.packagePath)
+                .appendingPathComponent("manifest.json")
+            do {
+                // Patch domain-specific content scripts to MAIN world on each load
+                // (idempotent — skips entries that already have a world set)
+                patchManifestForWebKit(at: manifestURL)
+                let manifest = try ExtensionUtils.validateManifest(at: manifestURL)
+                loadedExtensions.append(InstalledExtension(from: entity, manifest: manifest))
+                if entity.isEnabled {
+                    enabledEntities.append((entity, manifest))
+                }
+            } catch {
+                Self.logger.error("Failed to load manifest for '\(entity.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+            }
+        }
 
-                    // Recreate native extension if enabled
-                    if entity.isEnabled {
-                        Task {
-                            do {
-                                print(
-                                    "🔧 [ExtensionManager] Re-loading existing extension..."
-                                )
-                                print("   Package path: \(entity.packagePath)")
+        self.installedExtensions = loadedExtensions
 
-                                let webExtension = try await WKWebExtension(
-                                    resourceBaseURL: URL(
-                                        fileURLWithPath: entity.packagePath
-                                    )
-                                )
-                                let extensionContext = WKWebExtensionContext(
-                                    for: webExtension
-                                )
+        // No enabled extensions — mark loaded immediately
+        if enabledEntities.isEmpty {
+            Self.logger.info("No enabled extensions to load")
+            self.extensionsLoaded = true
+            return
+        }
 
-                                print("✅ Existing extension re-loaded")
-                                print(
-                                    "   Display name: \(webExtension.displayName ?? "Unknown")"
-                                )
-                                print(
-                                    "   Version: \(webExtension.version ?? "Unknown")"
-                                )
-                                print(
-                                    "   Unique ID: \(extensionContext.uniqueIdentifier)"
-                                )
-
-                                // Debug extension details and permissions
-                                print(
-                                    "ExtensionManager: Loading existing extension '\(webExtension.displayName ?? entity.name)'"
-                                )
-                                print(
-                                    "   Version: \(webExtension.version ?? entity.version)"
-                                )
-                                print(
-                                    "   Requested permissions: \(webExtension.requestedPermissions)"
-                                )
-                                print(
-                                    "   Current permissions: \(extensionContext.currentPermissions)"
-                                )
-
-                                // Pre-grant common permissions for existing extensions (like Dark Reader)
-                                grantCommonPermissions(
-                                    to: extensionContext,
-                                    webExtension: webExtension,
-                                    isExisting: true
-                                )
-
-                                // SECURITY CHANGE: Auto-grant host permissions to match Chrome behavior
-                                print("   🔓 Auto-granting host permissions for existing extension")
-                                for matchPattern in webExtension.requestedPermissionMatchPatterns {
-                                    extensionContext.setPermissionStatus(.grantedExplicitly, for: matchPattern)
-                                }
-                                for matchPattern in webExtension.optionalPermissionMatchPatterns {
-                                    extensionContext.setPermissionStatus(.grantedExplicitly, for: matchPattern)
-                                }
-
-                                // CRITICAL: Use WebKit's uniqueIdentifier, not the database entity ID
-                                let correctExtensionId = extensionContext.uniqueIdentifier
-                                
-                                // Update the database entity if the ID doesn't match WebKit's UUID
-                                if entity.id != correctExtensionId {
-                                    print("⚠️  Updating extension ID in database:")
-                                    print("   Old ID: \(entity.id)")
-                                    print("   New ID (WebKit): \(correctExtensionId)")
-                                    let oldId = entity.id
-                                    entity.id = correctExtensionId
-                                    try? self.context.save()
-                                    
-                                    // Also update the installedExtensions array by recreating the struct
-                                    await MainActor.run {
-                                        if let index = self.installedExtensions.firstIndex(where: { $0.id == oldId }) {
-                                            let old = self.installedExtensions[index]
-                                            // Recreate with the new ID
-                                            let updated = InstalledExtension(from: entity, manifest: old.manifest)
-                                            self.installedExtensions[index] = updated
-                                            print("✅ Updated installedExtensions array with new ID")
-                                        }
-                                    }
-                                }
-
-                                extensionContexts[correctExtensionId] = extensionContext
-                                try extensionController?.load(extensionContext)
-
-                                // If extension defines requested/optional permissions but they aren't granted yet, prompt.
-                                // We filter out minimal safe permissions which are auto-granted.
-                                let minimalSafe: Set<WKWebExtension.Permission> = [.storage, .alarms]
-                                let effectiveGranted = extensionContext.currentPermissions.subtracting(minimalSafe)
-                                
-                                if effectiveGranted.isEmpty
-                                    && (extensionContext.webExtension
-                                        .requestedPermissions.subtracting(minimalSafe).isEmpty == false
-                                        || extensionContext.webExtension
-                                            .optionalPermissions.isEmpty
-                                            == false),
-                                    let displayName = extensionContext
-                                        .webExtension.displayName
-                                {
-                                    self.presentPermissionPrompt(
-                                        requestedPermissions: extensionContext
-                                            .webExtension.requestedPermissions,
-                                        optionalPermissions: extensionContext
-                                            .webExtension.optionalPermissions,
-                                        requestedMatches: extensionContext
-                                            .webExtension
-                                            .requestedPermissionMatchPatterns,
-                                        optionalMatches: extensionContext
-                                            .webExtension
-                                            .optionalPermissionMatchPatterns,
-                                        extensionDisplayName: displayName,
-                                        onDecision: {
-                                            grantedPerms,
-                                            grantedMatches in
-                                            for p in extensionContext
-                                                .webExtension
-                                                .requestedPermissions.union(
-                                                    extensionContext
-                                                        .webExtension
-                                                        .optionalPermissions
-                                                )
-                                            {
-                                                extensionContext
-                                                    .setPermissionStatus(
-                                                        grantedPerms.contains(p)
-                                                            ? .grantedExplicitly
-                                                            : .deniedExplicitly,
-                                                        for: p
-                                                    )
-                                            }
-                                            for m in extensionContext
-                                                .webExtension
-                                                .requestedPermissionMatchPatterns
-                                                .union(
-                                                    extensionContext
-                                                        .webExtension
-                                                        .optionalPermissionMatchPatterns
-                                                )
-                                            {
-                                                extensionContext
-                                                    .setPermissionStatus(
-                                                        grantedMatches.contains(
-                                                            m
-                                                        )
-                                                            ? .grantedExplicitly
-                                                            : .deniedExplicitly,
-                                                        for: m
-                                                    )
-                                            }
-                                        },
-                                        onCancel: {
-                                            for p in extensionContext
-                                                .webExtension
-                                                .requestedPermissions
-                                            {
-                                                extensionContext
-                                                    .setPermissionStatus(
-                                                        .deniedExplicitly,
-                                                        for: p
-                                                    )
-                                            }
-                                            for m in extensionContext
-                                                .webExtension
-                                                .requestedPermissionMatchPatterns
-                                            {
-                                                extensionContext
-                                                    .setPermissionStatus(
-                                                        .deniedExplicitly,
-                                                        for: m
-                                                    )
-                                            }
-                                        },
-                                        extensionLogo: extensionContext
-                                            .webExtension.icon(
-                                                for: .init(
-                                                    width: 64,
-                                                    height: 64
-                                                )
-                                            ) ?? NSImage()
-                                    )
-                                }
-                            } catch {
-                                print(
-                                    "ExtensionManager: Failed to reload extension '\(entity.name)': \(error)"
-                                )
-                            }
+        // Load enabled extensions — parse manifests in parallel, then register sequentially
+        Task { @MainActor in
+            // Phase 1: Parse all extensions in parallel (I/O-bound)
+            let parsed: [(ExtensionEntity, WKWebExtension)] = await withTaskGroup(
+                of: (ExtensionEntity, WKWebExtension)?.self
+            ) { group in
+                for (entity, _) in enabledEntities {
+                    group.addTask {
+                        let resourceURL = URL(fileURLWithPath: entity.packagePath)
+                        do {
+                            let ext = try await WKWebExtension(resourceBaseURL: resourceURL)
+                            return (entity, ext)
+                        } catch {
+                            Self.logger.error("Failed to load extension '\(entity.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+                            return nil
                         }
                     }
-
-                } catch {
-                    print(
-                        "ExtensionManager: Failed to load manifest for extension '\(entity.name)': \(error)"
-                    )
                 }
+                var results: [(ExtensionEntity, WKWebExtension)] = []
+                for await result in group {
+                    if let r = result { results.append(r) }
+                }
+                return results
             }
 
-            self.installedExtensions = loadedExtensions
-            print(
-                "ExtensionManager: Loaded \(loadedExtensions.count) extensions using native WKWebExtension"
-            )
+            // Phase 2: Register contexts sequentially (must be on MainActor)
+            for (entity, webExtension) in parsed {
+                let extensionContext = WKWebExtensionContext(for: webExtension)
+                let extensionId = entity.id
+                self.configureContextIdentity(
+                    extensionContext,
+                    extensionId: extensionId
+                )
 
-        } catch {
-            print(
-                "ExtensionManager: Failed to load installed extensions: \(error)"
-            )
+                Self.logger.info("Loading '\(webExtension.displayName ?? entity.name, privacy: .public)' MV\(webExtension.manifestVersion) hasBackground=\(webExtension.hasBackgroundContent)")
+
+                // Grant all permissions
+                for p in webExtension.requestedPermissions {
+                    extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
+                }
+                for p in webExtension.optionalPermissions {
+                    extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
+                }
+                for m in webExtension.allRequestedMatchPatterns {
+                    extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+                }
+                for m in webExtension.optionalPermissionMatchPatterns {
+                    extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+                }
+
+                extensionContext.isInspectable = true
+
+                self.extensionContexts[extensionId] = extensionContext
+
+                // Set up externally_connectable bridge BEFORE loading background
+                self.setupExternallyConnectableBridge(
+                    for: extensionContext,
+                    extensionId: extensionId,
+                    packagePath: entity.packagePath
+                )
+
+                do {
+                    try self.extensionController?.load(extensionContext)
+                } catch {
+                    Self.logger.error("Failed to register extension '\(entity.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+                    continue
+                }
+
+                // Start background service worker if the extension has one
+                if webExtension.hasBackgroundContent {
+                    extensionContext.loadBackgroundContent(completionHandler: { [weak self] error in
+                        if let error {
+                            Self.logger.error("Background content failed for '\(entity.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+                        } else {
+                            Self.logger.info("Background content started for '\(entity.name, privacy: .public)'")
+                            // Probe background webview for JS errors after a short delay
+                            self?.probeBackgroundHealth(for: extensionContext, name: entity.name)
+                        }
+                    })
+                }
+
+                Self.logger.info("Loaded '\(entity.name, privacy: .public)' — contexts: \(self.extensionController?.extensionContexts.count ?? 0, privacy: .public)")
+            }
+
+            Self.logger.info("All extensions loaded — signaling ready")
+            self.extensionsLoaded = true
         }
     }
 
@@ -1312,6 +2191,11 @@ final class ExtensionManager: NSObject, ObservableObject,
         return extensionController
     }
 
+    /// IDs of all loaded extension contexts (for diagnostics).
+    var loadedContextIDs: [String] {
+        return Array(extensionContexts.keys)
+    }
+
     // MARK: - Debugging Utilities
 
     /// Show debugging console for popup troubleshooting
@@ -1331,19 +2215,19 @@ final class ExtensionManager: NSObject, ObservableObject,
                 ?? ExtensionWindowAdapter(browserManager: browserManager)
             self.windowAdapter = adapter
 
-            print(
-                "ExtensionManager: Notifying controller about window and tabs..."
-            )
-
             // Important: Notify about window FIRST
             controller.didOpenWindow(adapter)
             controller.didFocusWindow(adapter)
 
-            // Notify about existing tabs
+            // Only notify about tabs that already have webviews.
+            // Tabs without webviews (deferred for extension loading) will
+            // self-register via notifyTabOpened() when their webview is created.
+            // Registering tabs with nil webviews causes the controller to cache
+            // stale state, breaking chrome.runtime messaging.
             let allTabs =
                 browserManager.tabManager.pinnedTabs
                 + browserManager.tabManager.tabs
-            for tab in allTabs {
+            for tab in allTabs where !tab.isUnloaded {
                 let tabAdapter = self.adapter(
                     for: tab,
                     browserManager: browserManager
@@ -1351,8 +2235,9 @@ final class ExtensionManager: NSObject, ObservableObject,
                 controller.didOpenTab(tabAdapter)
             }
 
-            // Notify about current active tab
-            if let currentTab = browserManager.currentTabForActiveWindow() {
+            // Notify about current active tab only if it has a webview
+            if let currentTab = browserManager.currentTabForActiveWindow(),
+               !currentTab.isUnloaded {
                 let tabAdapter = self.adapter(
                     for: currentTab,
                     browserManager: browserManager
@@ -1361,28 +2246,18 @@ final class ExtensionManager: NSObject, ObservableObject,
                 controller.didSelectTabs([tabAdapter])
             }
 
-            print(
-                "ExtensionManager: Attached to browser manager and synced \(allTabs.count) tabs in window"
-            )
+            Self.logger.info("Attached to browser manager with \(allTabs.count) tabs")
+
         }
     }
 
     // MARK: - Controller event notifications for tabs
-    private var lastCachedAdapterLog: Date = Date.distantPast
 
     @available(macOS 15.5, *)
     private func adapter(for tab: Tab, browserManager: BrowserManager)
         -> ExtensionTabAdapter
     {
         if let existing = tabAdapters[tab.id] {
-            // Only log cached adapter access every 10 seconds to prevent spam
-            let now = Date()
-            if now.timeIntervalSince(lastCachedAdapterLog) > 10.0 {
-                print(
-                    "[ExtensionManager] Returning CACHED adapter for '\(tab.name)': \(ObjectIdentifier(existing))"
-                )
-                lastCachedAdapterLog = now
-            }
             return existing
         }
         let created = ExtensionTabAdapter(
@@ -1390,9 +2265,7 @@ final class ExtensionManager: NSObject, ObservableObject,
             browserManager: browserManager
         )
         tabAdapters[tab.id] = created
-        print(
-            "[ExtensionManager] Created NEW adapter for '\(tab.name)': \(ObjectIdentifier(created))"
-        )
+        Self.logger.debug("Created tab adapter for '\(tab.name, privacy: .public)'")
         return created
     }
 
@@ -1409,6 +2282,17 @@ final class ExtensionManager: NSObject, ObservableObject,
         else { return }
         let a = adapter(for: tab, browserManager: bm)
         controller.didOpenTab(a)
+    }
+
+    /// Grant all extension contexts explicit access to a URL.
+    /// WKWebExtensionController uses Safari's per-URL permission model where even
+    /// granted match patterns don't give implicit URL access. Without this, content
+    /// scripts won't inject and messaging fails. Call before navigation starts.
+    @available(macOS 15.4, *)
+    func grantExtensionAccessToURL(_ url: URL) {
+        for (_, ctx) in extensionContexts {
+            ctx.setPermissionStatus(.grantedExplicitly, for: url)
+        }
     }
 
     @available(macOS 15.4, *)
@@ -1444,7 +2328,7 @@ final class ExtensionManager: NSObject, ObservableObject,
 
     /// Register a UI anchor view for an extension action button to position popovers.
     func setActionAnchor(for extensionId: String, anchorView: NSView) {
-        print("📍 setActionAnchor called for extension ID: \(extensionId)")
+        Self.logger.debug("setActionAnchor called for extension ID: \(extensionId, privacy: .public)")
         let anchor = WeakAnchor(view: anchorView, window: anchorView.window)
         if actionAnchors[extensionId] == nil { actionAnchors[extensionId] = [] }
         // Remove stale anchors
@@ -1456,14 +2340,18 @@ final class ExtensionManager: NSObject, ObservableObject,
         } else {
             actionAnchors[extensionId]?.append(anchor)
         }
-        print("   Total anchors for this extension: \(actionAnchors[extensionId]?.count ?? 0)")
+        Self.logger.debug("Total anchors for extension \(extensionId, privacy: .public): \(self.actionAnchors[extensionId]?.count ?? 0)")
+
+        // MEMORY LEAK FIX: Remove any previous observer for this anchor to prevent accumulation
+        if anchorObserverTokens[extensionId] == nil { anchorObserverTokens[extensionId] = [] }
 
         // Update anchor if view moves to a different window
-        NotificationCenter.default.addObserver(
+        let token = NotificationCenter.default.addObserver(
             forName: NSView.frameDidChangeNotification,
             object: anchorView,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self, weak anchorView] _ in
+            guard let anchorView else { return }
             if let idx = self?.actionAnchors[extensionId]?.firstIndex(
                 where: { $0.view === anchorView }
             ) {
@@ -1474,6 +2362,7 @@ final class ExtensionManager: NSObject, ObservableObject,
                 self?.actionAnchors[extensionId]?[idx] = updated
             }
         }
+        anchorObserverTokens[extensionId]?.append(token)
     }
 
     // MARK: - WKWebExtensionControllerDelegate
@@ -1484,27 +2373,42 @@ final class ExtensionManager: NSObject, ObservableObject,
         for extensionContext: WKWebExtensionContext,
         completionHandler: @escaping (Error?) -> Void
     ) {
-        // Present the extension's action popover; keep behavior minimal and stable
+        let extName = extensionContext.webExtension.displayName ?? "?"
+        Self.logger.info("presentActionPopup delegate called for '\(extName, privacy: .public)'")
 
-        // Ensure critical permissions at popup time (user-invoked -> activeTab should be granted)
-        extensionContext.setPermissionStatus(
-            .grantedExplicitly,
-            for: .activeTab
-        )
-        extensionContext.setPermissionStatus(
-            .grantedExplicitly,
-            for: .scripting
-        )
-        extensionContext.setPermissionStatus(.grantedExplicitly, for: .tabs)
+        // Grant ALL the extension's requested + optional permissions so the popup
+        // can use chrome.tabs, chrome.runtime, etc. without hanging.
+        // allRequestedMatchPatterns includes content_scripts patterns, not just host_permissions.
+        for p in extensionContext.webExtension.requestedPermissions {
+            extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
+        }
+        for p in extensionContext.webExtension.optionalPermissions {
+            extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
+        }
+        for m in extensionContext.webExtension.allRequestedMatchPatterns {
+            extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+        }
+        for m in extensionContext.webExtension.optionalPermissionMatchPatterns {
+            extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+        }
 
-        // No additional diagnostics
+        Self.logger.debug("Granted permissions: \(extensionContext.currentPermissions.map { String(describing: $0) }.joined(separator: ", "), privacy: .public)")
 
-        // No extension-specific diagnostics
-
-        // Focus state should already be correct, avoid re-notifying controller during delegate callback
+        // Ensure background service worker is alive before showing the popup.
+        // MV3 workers auto-terminate after ~5 min of inactivity; if the popup
+        // tries chrome.runtime.sendMessage and the worker is dead, it hangs forever.
+        if extensionContext.webExtension.hasBackgroundContent {
+            extensionContext.loadBackgroundContent { error in
+                if let error {
+                    Self.logger.error("Failed to wake background worker for '\(extName, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+                } else {
+                    Self.logger.debug("Background worker alive for '\(extName, privacy: .public)'")
+                }
+            }
+        }
 
         guard let popover = action.popupPopover else {
-            print("❌ DELEGATE: No popover available on action")
+            Self.logger.error("No popover available on action")
             completionHandler(
                 NSError(
                     domain: "ExtensionManager",
@@ -1517,350 +2421,17 @@ final class ExtensionManager: NSObject, ObservableObject,
             return
         }
 
-        print(
-            "✅ DELEGATE: Native popover available - configuring and presenting!"
-        )
-        
-        // Fix for popup closing on mouse exit: ensure it stays open until clicked outside
-        // 'transient' was still closing on mouse exit from the anchor view in some cases.
-        // 'applicationDefined' gives us full control and shouldn't close automatically.
-        // Note: We might need to handle outside clicks manually if this is too persistent,
-        // but for now, this solves the "unusable" problem.
-        popover.behavior = .applicationDefined
+        popover.behavior = .transient
 
         if let webView = action.popupWebView {
-
-            // Ensure the WebView has proper configuration for extension resources
-            if webView.configuration.webExtensionController == nil {
-                webView.configuration.webExtensionController = controller
-                print("   Attached extension controller to popup WebView")
-            }
-
-            // Enable inspection for debugging
             webView.isInspectable = true
-            
-            // Explicitly enable JavaScript
-            webView.configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-            webView.configuration.preferences.javaScriptEnabled = true
-
-            // Temporarily disable console helper to test if it's causing container errors
-            // PopupConsole.shared.attach(to: webView)
-
-            // No custom message handlers; rely on native MV3 APIs
-            
-            // Set UI delegate for context menu (reload option)
-            let uiDelegate = PopupUIDelegate(webView: webView)
-            webView.uiDelegate = uiDelegate
-            webView.navigationDelegate = uiDelegate  // Also set navigation delegate for logging
-            self.popupUIDelegate = uiDelegate  // Keep delegate alive
-            
-            // Inject platform info polyfill for extensions that need device information
-            let platformPolyfill = """
-            (function() {
-                // Ensure chrome.runtime exists
-                if (typeof chrome === 'undefined') window.chrome = {};
-                if (!chrome.runtime) chrome.runtime = {};
-                
-                // Add getPlatformInfo API
-                if (!chrome.runtime.getPlatformInfo) {
-                    chrome.runtime.getPlatformInfo = function() {
-                        return Promise.resolve({
-                            os: 'mac',
-                            arch: 'arm' // or 'x86-64' depending on Mac architecture
-                        });
-                    };
-                    console.log('✅ Added chrome.runtime.getPlatformInfo polyfill');
-                }
-            })();
-            """
-            let platformScript = WKUserScript(
-                source: platformPolyfill,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
-            )
-            webView.configuration.userContentController.addUserScript(platformScript)
-            
-            // Inject comprehensive resource debugging script (logs to console)
-            if let extId = extensionContexts.first(where: { $0.value === extensionContext })?.key,
-               let inst = installedExtensions.first(where: { $0.id == extId }) {
-                let extensionDir = URL(fileURLWithPath: inst.packagePath)
-                let extDirPath = extensionDir.path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
-                
-                // Get list of all files recursively
-                var allFiles: [String] = []
-                if let enumerator = FileManager.default.enumerator(atPath: extensionDir.path) {
-                    for case let file as String in enumerator {
-                        allFiles.append(file)
-                    }
-                }
-                let filesJSON = allFiles.sorted().map { "'\($0)'" }.joined(separator: ", ")
-                
-                // Read manifest to check popup path
-                let manifestURL = extensionDir.appendingPathComponent("manifest.json")
-                var manifestPopupPath = "unknown"
-                if let manifestData = try? Data(contentsOf: manifestURL),
-                   let manifest = try? JSONSerialization.jsonObject(with: manifestData) as? [String: Any],
-                   let action = manifest["action"] as? [String: Any],
-                   let defaultPopup = action["default_popup"] as? String {
-                    manifestPopupPath = defaultPopup
-                }
-                
-                let debugScript = """
-                (function() {
-                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                    console.log('📍 EXTENSION POPUP DIAGNOSTICS');
-                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                    console.log('');
-                    console.log('📄 Popup URL:', window.location.href);
-                    console.log('📂 Extension directory:', '\(extDirPath)');
-                    console.log('📋 Manifest popup path:', '\(manifestPopupPath)');
-                    console.log('🆔 Extension ID from URL:', window.location.href.split('/')[2]);
-                    console.log('🆔 Extension directory ID:', '\(extId)');
-                    console.log('');
-                    
-                    // Log all script elements and their resolved URLs
-                    const scripts = document.querySelectorAll('script[src]');
-                    console.log('📜 Script elements in HTML:', scripts.length);
-                    scripts.forEach((script, i) => {
-                        const src = script.getAttribute('src');
-                        const resolved = new URL(src, document.baseURI).href;
-                        console.log(`   ${i + 1}. "${src}" → ${resolved}`);
-                    });
-                    console.log('');
-                    
-                    console.log('📋 ALL files in extension (recursive):');
-                    const installedFiles = [\(filesJSON)];
-                    installedFiles.forEach(file => console.log(`   • ${file}`));
-                    console.log('');
-                    
-                    // Check which scripts are missing
-                    const requiredScripts = ['utils.js', 'extensionState.js', 'heuristicsRedefinitions.js', 'page_popup.js'];
-                    console.log('🔍 File existence check (root):');
-                    requiredScripts.forEach(script => {
-                        const exists = installedFiles.includes(script);
-                        console.log(`   ${exists ? '✅' : '❌'} ${script}`);
-                    });
-                    console.log('');
-                    
-                    // Check if they exist in a popup/ subdirectory
-                    console.log('🔍 File existence check (popup/ subdirectory):');
-                    requiredScripts.forEach(script => {
-                        const exists = installedFiles.includes('popup/' + script);
-                        console.log(`   ${exists ? '✅' : '❌'} popup/${script}`);
-                    });
-                    console.log('');
-                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                })();
-                """
-                let userScript = WKUserScript(
-                    source: debugScript,
-                    injectionTime: .atDocumentEnd,
-                    forMainFrameOnly: true
-                )
-                webView.configuration.userContentController.addUserScript(userScript)
-            }
-
-            if shouldAutoSizeActionPopups {
-                // Install a light ResizeObserver to autosize the popover to content
-                let resizeScript = """
-                    (function(){
-                      try {
-                        const post = (label, payload) => { try { webkit.messageHandlers.NookDiag.postMessage({label, payload, phase:'resize'}); } catch(_){} };
-                        const measure = () => {
-                          const d=document, e=d.documentElement, b=d.body;
-                          const w = Math.ceil(Math.max(e.scrollWidth, b?b.scrollWidth:0, e.clientWidth));
-                          const h = Math.ceil(Math.max(e.scrollHeight, b?b.scrollHeight:0, e.clientHeight));
-                          post('popupSize', {w, h});
-                        };
-                        new ResizeObserver(measure).observe(document.documentElement);
-                        window.addEventListener('load', measure);
-                        setTimeout(measure, 50); setTimeout(measure, 250); setTimeout(measure, 800);
-                      } catch(_){}
-                    })();
-                    """
-                let user = WKUserScript(
-                    source: resizeScript,
-                    injectionTime: .atDocumentEnd,
-                    forMainFrameOnly: true
-                )
-                webView.configuration.userContentController.addUserScript(user)
-            }
-
-            // Minimal polyfills for Chromium-only APIs some extensions feature-detect
-            let polyfillScript = """
-                (function(){
-                  try {
-                    window.chrome = window.chrome || {};
-                    var chromeNS = window.chrome;
-                    chromeNS.identity = chromeNS.identity || {};
-
-                    var pendingIdentityRequests = Object.create(null);
-                    var identityCounter = 0;
-
-                    chromeNS.identity.launchWebAuthFlow = function(details, callback){
-                      var url = details && details.url ? String(details.url) : null;
-                      if (!url) {
-                        var missingUrlError = new Error('launchWebAuthFlow requires a url');
-                        if (typeof callback === 'function') {
-                          try { callback(null); } catch (_) {}
-                        }
-                        return Promise.reject(missingUrlError);
-                      }
-
-                      var interactive = !!(details && details.interactive);
-                      var prefersEphemeral = !!(details && details.useEphemeralSession);
-                      var callbackScheme = null;
-                      if (details && typeof details.callbackURLScheme === 'string' && details.callbackURLScheme.length > 0) {
-                        callbackScheme = details.callbackURLScheme;
-                      }
-
-                      var requestId = 'nook-auth-' + (++identityCounter);
-                      var entry = {
-                        resolve: null,
-                        reject: null,
-                        callback: (typeof callback === 'function') ? callback : null
-                      };
-
-                      var promise = new Promise(function(resolve, reject){
-                        entry.resolve = resolve;
-                        entry.reject = reject;
-                      });
-
-                      pendingIdentityRequests[requestId] = entry;
-
-                      try {
-                        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.NookIdentity) {
-                          window.webkit.messageHandlers.NookIdentity.postMessage({
-                            requestId: requestId,
-                            url: url,
-                            interactive: interactive,
-                            prefersEphemeral: prefersEphemeral,
-                            callbackScheme: callbackScheme
-                          });
-                        } else {
-                          throw new Error('Native identity bridge unavailable');
-                        }
-                      } catch (error) {
-                        delete pendingIdentityRequests[requestId];
-                        if (entry.reject) { entry.reject(error); }
-                        if (entry.callback) {
-                          try { entry.callback(null); } catch (_) {}
-                        }
-                        return Promise.reject(error);
-                      }
-
-                      return promise;
-                    };
-
-                    if (typeof window.__nookCompleteIdentityFlow !== 'function') {
-                      window.__nookCompleteIdentityFlow = function(result) {
-                        if (!result || !result.requestId) { return; }
-                        var entry = pendingIdentityRequests[result.requestId];
-                        if (!entry) { return; }
-                        delete pendingIdentityRequests[result.requestId];
-
-                        var status = result.status || 'failure';
-                        if (status === 'success') {
-                          var payload = result.url || null;
-                          if (entry.resolve) { entry.resolve(payload); }
-                          if (entry.callback) {
-                            try { entry.callback(payload); } catch (_) {}
-                          }
-                        } else {
-                          var errMessage = result.message || 'Authentication failed';
-                          var error = new Error(errMessage);
-                          if (result.code) { error.code = result.code; }
-                          if (entry.reject) { entry.reject(error); }
-                          if (entry.callback) {
-                            try { entry.callback(null); } catch (_) {}
-                          }
-                        }
-                      };
-                    }
-
-                    if (typeof chromeNS.webRequestAuthProvider === 'undefined') {
-                      chromeNS.webRequestAuthProvider = {
-                        addListener: function(){},
-                        removeListener: function(){}
-                      };
-                    }
-                  } catch(_){}
-                })();
-                """
-            let polyfill = WKUserScript(
-                source: polyfillScript,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
-            )
-            webView.configuration.userContentController.addUserScript(polyfill)
-
-            let worldProbe = """
-                (async function(){
-                  try {
-                    const tabsNS = (browser?.tabs || chrome?.tabs);
-                    const scriptingNS = (browser?.scripting || chrome?.scripting);
-                    if (!tabsNS || !scriptingNS) return 'no-apis';
-                    let tabs;
-                    try { tabs = await tabsNS.query({active:true, currentWindow:true}); } catch(_) {
-                      // callback fallback
-                      tabs = await new Promise((resolve,reject)=>{ try { tabsNS.query({active:true,currentWindow:true}, (t)=>resolve(t)); } catch(e){ reject(e); } });
-                    }
-                    const t = tabs && tabs[0];
-                    if (!t || t.id == null) return 'no-tab';
-                    const res = await scriptingNS.executeScript({ target: { tabId: t.id }, world: 'MAIN', func: function(){ try { document.documentElement.setAttribute('data-Nook-probe','1'); return 'ok'; } catch(e){ return 'err:'+String(e); } } });
-                    return 'ok:' + (res && res.length ? 'len='+res.length : 'nores');
-                  } catch(e) {
-                    return 'err:' + (e && (e.message||String(e)));
-                  }
-                })();
-                """
-
-            webView.evaluateJavaScript(worldProbe) { result, error in
-                if let error = error {
-                    print("   World probe error: \(error.localizedDescription)")
-                } else {
-                    print(
-                        "   World probe result: \(String(describing: result))"
-                    )
-                }
-            }
-
-            // After a short delay, verify in the page WebView whether the probe attribute was set
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                [weak self] in
-                guard let self = self else { return }
-                if let windowAdapter = self.windowAdapter,
-                    let activeTab = windowAdapter.activeTab(
-                        for: extensionContext
-                    ),
-                    let tabAdapter = activeTab as? ExtensionTabAdapter
-                {
-                    guard let pageWV = tabAdapter.tab.webView else { return }
-                    pageWV.evaluateJavaScript(
-                        "document.documentElement.getAttribute('data-Nook-probe')"
-                    ) { val, err in
-                        if let err = err {
-                            print(
-                                "   Page probe read error: \(err.localizedDescription)"
-                            )
-                        } else {
-                            print(
-                                "   Page probe attribute: \(String(describing: val))"
-                            )
-                        }
-                    }
-                }
-            }
-        } else {
-            print("   No popupWebView present on action")
         }
 
         // Present the popover on main thread
         DispatchQueue.main.async {
             let targetWindow = NSApp.keyWindow ?? NSApp.mainWindow
             
-            // Force behavior to applicationDefined right before showing to ensure it persists
-            popover.behavior = .applicationDefined
+            popover.behavior = .transient
             popover.delegate = self
             self.isPopupActive = true
             
@@ -1872,13 +2443,12 @@ final class ExtensionManager: NSObject, ObservableObject,
             })?.key,
                 var anchors = self.actionAnchors[extId]
             {
-                print("   🔍 Found extension ID: \(extId)")
-                print("   📌 Registered anchors for this extension: \(anchors.count)")
+                Self.logger.debug("   📌 Registered anchors for this extension: \(anchors.count)")
                 
                 // Clean up stale anchors (no view OR no window)
                 anchors.removeAll { $0.view == nil || $0.view?.window == nil }
                 self.actionAnchors[extId] = anchors
-                print("   📌 After cleanup: \(anchors.count) anchors")
+                Self.logger.debug("   📌 After cleanup: \(anchors.count) anchors")
 
                 // Find anchor in current window
                 if let win = targetWindow,
@@ -1886,7 +2456,6 @@ final class ExtensionManager: NSObject, ObservableObject,
                     let view = match.view,
                     view.window != nil  // Double-check view is still in window
                 {
-                    print("   Using registered anchor in current window")
                     popover.show(
                         relativeTo: view.bounds,
                         of: view,
@@ -1900,7 +2469,6 @@ final class ExtensionManager: NSObject, ObservableObject,
                 if let validAnchor = anchors.first(where: { $0.view?.window != nil }),
                    let view = validAnchor.view
                 {
-                    print("   Using first available anchor with window")
                     popover.show(
                         relativeTo: view.bounds,
                         of: view,
@@ -1910,7 +2478,7 @@ final class ExtensionManager: NSObject, ObservableObject,
                     return
                 }
                 
-                print("   ⚠️  No valid anchors found (all were removed from windows)")
+                Self.logger.debug("   ⚠️  No valid anchors found (all were removed from windows)")
             }
 
             // Fallback to center of window
@@ -1921,7 +2489,6 @@ final class ExtensionManager: NSObject, ObservableObject,
                     width: 20,
                     height: 20
                 )
-                print("   Using fallback anchor in center of window")
                 popover.show(
                     relativeTo: rect,
                     of: contentView,
@@ -1931,7 +2498,7 @@ final class ExtensionManager: NSObject, ObservableObject,
                 return
             }
 
-            print("❌ DELEGATE: No anchor or contentView available")
+            Self.logger.error("DELEGATE: No anchor or contentView available")
             completionHandler(
                 NSError(
                     domain: "ExtensionManager",
@@ -1956,25 +2523,25 @@ final class ExtensionManager: NSObject, ObservableObject,
         didStartProvisionalNavigation navigation: WKNavigation!
     ) {
         let urlString = webView.url?.absoluteString ?? "(nil)"
-        print("[Popup] didStartProvisionalNavigation: \"\(urlString)\"")
+        Self.logger.debug("[Popup] didStartProvisionalNavigation: \"\(urlString)\"")
         PopupConsole.shared.log("[Navigation] Started loading: \(urlString)")
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         let urlString = webView.url?.absoluteString ?? "(nil)"
-        print("[Popup] didCommit: \"\(urlString)\"")
+        Self.logger.debug("[Popup] didCommit: \"\(urlString)\"")
         PopupConsole.shared.log("[Navigation] Committed: \(urlString)")
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         let urlString = webView.url?.absoluteString ?? "(nil)"
-        print("[Popup] didFinish: \"\(urlString)\"")
+        Self.logger.debug("[Popup] didFinish: \"\(urlString)\"")
         PopupConsole.shared.log("[Navigation] Finished: \(urlString)")
 
         // Get document title
         webView.evaluateJavaScript("document.title") { value, _ in
             let title = (value as? String) ?? "(unknown)"
-            print("[Popup] document.title: \"\(title)\"")
+            Self.logger.debug("[Popup] document.title: \"\(title)\"")
             PopupConsole.shared.log("[Document] Title: \(title)")
         }
 
@@ -2026,17 +2593,15 @@ final class ExtensionManager: NSObject, ObservableObject,
 
         webView.evaluateJavaScript(comprehensiveProbe) { value, error in
             if let error = error {
-                print(
-                    "[Popup] comprehensive probe error: \(error.localizedDescription)"
-                )
+                Self.logger.error("[Popup] comprehensive probe error: \(error.localizedDescription)")
                 PopupConsole.shared.log(
                     "[Error] Probe failed: \(error.localizedDescription)"
                 )
             } else if let dict = value as? [String: Any] {
-                print("[Popup] comprehensive probe: \(dict)")
+                Self.logger.debug("[Popup] comprehensive probe: \(dict)")
                 PopupConsole.shared.log("[Probe] APIs: \(dict)")
             } else {
-                print("[Popup] comprehensive probe: unexpected result type")
+                Self.logger.debug("[Popup] comprehensive probe: unexpected result type")
                 PopupConsole.shared.log(
                     "[Warning] Probe returned unexpected result"
                 )
@@ -2074,9 +2639,7 @@ final class ExtensionManager: NSObject, ObservableObject,
             """
         webView.evaluateJavaScript(safeScriptingPatch) { _, err in
             if let err = err {
-                print(
-                    "[Popup] safeScriptingPatch error: \(err.localizedDescription)"
-                )
+                Self.logger.error("[Popup] safeScriptingPatch error: \(err.localizedDescription)")
             }
         }
 
@@ -2090,9 +2653,7 @@ final class ExtensionManager: NSObject, ObservableObject,
         withError error: Error
     ) {
         let urlString = webView.url?.absoluteString ?? "(nil)"
-        print(
-            "[Popup] didFail: \(error.localizedDescription) - URL: \(urlString)"
-        )
+        Self.logger.error("[Popup] didFail: \(error.localizedDescription) - URL: \(urlString)")
         PopupConsole.shared.log(
             "[Error] Navigation failed: \(error.localizedDescription)"
         )
@@ -2104,35 +2665,24 @@ final class ExtensionManager: NSObject, ObservableObject,
         withError error: Error
     ) {
         let urlString = webView.url?.absoluteString ?? "(nil)"
-        print(
-            "[Popup] didFailProvisional: \(error.localizedDescription) - URL: \(urlString)"
-        )
+        Self.logger.error("[Popup] didFailProvisional: \(error.localizedDescription) - URL: \(urlString)")
         PopupConsole.shared.log(
             "[Error] Provisional navigation failed: \(error.localizedDescription)"
         )
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        print("[Popup] content process terminated")
+        Self.logger.debug("[Popup] content process terminated")
         PopupConsole.shared.log("[Critical] WebView process terminated")
     }
 
     // MARK: - Windows exposure (tabs/windows APIs)
-    private var lastFocusedWindowCall: Date = Date.distantPast
-    private var lastOpenWindowsCall: Date = Date.distantPast
 
     @available(macOS 15.5, *)
     func webExtensionController(
         _ controller: WKWebExtensionController,
         focusedWindowFor extensionContext: WKWebExtensionContext
     ) -> (any WKWebExtensionWindow)? {
-        // Throttle logging to prevent spam
-        let now = Date()
-        if now.timeIntervalSince(lastFocusedWindowCall) > 10.0 {
-            print("[ExtensionManager] 🎯 focusedWindowFor() called")
-            lastFocusedWindowCall = now
-        }
-
         guard let bm = browserManagerRef else {
             return nil
         }
@@ -2147,13 +2697,6 @@ final class ExtensionManager: NSObject, ObservableObject,
         _ controller: WKWebExtensionController,
         openWindowsFor extensionContext: WKWebExtensionContext
     ) -> [any WKWebExtensionWindow] {
-        // Throttle logging to prevent spam
-        let now = Date()
-        if now.timeIntervalSince(lastOpenWindowsCall) > 10.0 {
-            print("[ExtensionManager] 🎯 openWindowsFor() called")
-            lastOpenWindowsCall = now
-        }
-
         guard let bm = browserManagerRef else {
             return []
         }
@@ -2308,13 +2851,12 @@ final class ExtensionManager: NSObject, ObservableObject,
         completionHandler:
             @escaping ((any WKWebExtensionTab)?, (any Error)?) -> Void
     ) {
-        print("🆕 [DELEGATE] openNewTabUsing called!")
-        print("   URL: \(configuration.url?.absoluteString ?? "nil")")
-        print("   Should be active: \(configuration.shouldBeActive)")
-        print("   Should be pinned: \(configuration.shouldBePinned)")
+        Self.logger.debug("   URL: \(configuration.url?.absoluteString ?? "nil")")
+        Self.logger.debug("   Should be active: \(configuration.shouldBeActive)")
+        Self.logger.debug("   Should be pinned: \(configuration.shouldBePinned)")
 
         guard let bm = browserManagerRef else {
-            print("❌ Browser manager reference is nil")
+            Self.logger.error("Browser manager reference is nil")
             completionHandler(
                 nil,
                 NSError(
@@ -2336,9 +2878,6 @@ final class ExtensionManager: NSObject, ObservableObject,
             let controller = extensionController,
             let resolvedContext = controller.extensionContext(for: url)
         {
-            print(
-                "🎛️ [DELEGATE] Opening extension page in tab with extension configuration: \(url.absoluteString)"
-            )
             let space = bm.tabManager.currentSpace
             let newTab = bm.tabManager.createNewTab(
                 url: url.absoluteString,
@@ -2368,7 +2907,7 @@ final class ExtensionManager: NSObject, ObservableObject,
             if configuration.shouldBeActive {
                 bm.tabManager.setActiveTab(newTab)
             }
-            print("✅ Created new tab: \(newTab.name)")
+            Self.logger.info("Created new tab: \(newTab.name)")
 
             // Return the created tab adapter to the extension
             let tabAdapter = self.stableAdapter(for: newTab)
@@ -2376,11 +2915,11 @@ final class ExtensionManager: NSObject, ObservableObject,
             return
         }
         // No URL specified — create a blank tab
-        print("⚠️ No URL specified, creating blank tab")
+        Self.logger.debug("⚠️ No URL specified, creating blank tab")
         let space = bm.tabManager.currentSpace
         let newTab = bm.tabManager.createNewTab(in: space)
         if configuration.shouldBeActive { bm.tabManager.setActiveTab(newTab) }
-        print("✅ Created blank tab: \(newTab.name)")
+        Self.logger.info("Created blank tab: \(newTab.name)")
 
         // Return the created tab adapter to the extension
         let tabAdapter = self.stableAdapter(for: newTab)
@@ -2395,8 +2934,7 @@ final class ExtensionManager: NSObject, ObservableObject,
         completionHandler:
             @escaping ((any WKWebExtensionWindow)?, (any Error)?) -> Void
     ) {
-        print("🆕 [DELEGATE] openNewWindowUsing called!")
-        print("   Tab URLs: \(configuration.tabURLs.map { $0.absoluteString })")
+        Self.logger.debug("   Tab URLs: \(configuration.tabURLs.map { $0.absoluteString })")
 
         guard let bm = browserManagerRef else {
             completionHandler(
@@ -2416,9 +2954,9 @@ final class ExtensionManager: NSObject, ObservableObject,
         // OAuth flows from extensions should open in tabs to share the same data store
         // Miniwindows use separate data stores which breaks OAuth flows
         if let firstURL = configuration.tabURLs.first,
-            isLikelyOAuthURL(firstURL)
+            OAuthDetector.isLikelyOAuthPopupURL(firstURL)
         {
-            print(
+            Self.logger.debug(
                 "🔐 [DELEGATE] Extension OAuth window detected, opening in new tab: \(firstURL.absoluteString)"
             )
             // Create a new tab in the current space with the same profile/data store
@@ -2452,8 +2990,7 @@ final class ExtensionManager: NSObject, ObservableObject,
         if windowAdapter == nil {
             windowAdapter = ExtensionWindowAdapter(browserManager: bm)
         }
-        print("✅ Created new window (space): \(newSpace.name)")
-        print("✅ Created new window (space): \(newSpace.name)")
+        Self.logger.info("Created new window (space): \(newSpace.name)")
         completionHandler(windowAdapter, nil)
     }
 
@@ -2467,8 +3004,20 @@ final class ExtensionManager: NSObject, ObservableObject,
         for extensionContext: WKWebExtensionContext,
         replyHandler: @escaping (Any?, (any Error)?) -> Void
     ) {
-        print("📨 [NativeMessaging] sendMessage to: \(applicationId)")
-        
+        // Intercept Bitwarden's "showPopover" native message. When isSafariApi=true and
+        // chrome.browserAction.openPopup() is unavailable, Bitwarden sends this message to
+        // "com.bitwarden.desktop" to open its action popup. Route it to performAction instead.
+        if let msg = message as? [String: Any],
+           let command = msg["command"] as? String,
+           command == "showPopover" {
+            Self.logger.info("[NativeMessaging] Intercepting showPopover for '\(extensionContext.webExtension.displayName ?? "?", privacy: .public)'")
+            let tab = browserManagerRef?.currentTabForActiveWindow()
+            let adapter: ExtensionTabAdapter? = tab.flatMap { stableAdapter(for: $0) }
+            extensionContext.performAction(for: adapter)
+            replyHandler(["success": true], nil)
+            return
+        }
+
         // Single-shot message handling
         let handler = NativeMessagingHandler(applicationId: applicationId)
         handler.sendMessage(message) { response, error in
@@ -2483,11 +3032,10 @@ final class ExtensionManager: NSObject, ObservableObject,
         for extensionContext: WKWebExtensionContext
     ) {
         guard let applicationId = port.applicationIdentifier else {
-            print("❌ [NativeMessaging] Port connection missing application identifier")
+            Self.logger.error("[NativeMessaging] Port connection missing application identifier")
             return
         }
         
-        print("🔌 [NativeMessaging] connectUsingMessagePort to: \(applicationId)")
         
         let handler = NativeMessagingHandler(applicationId: applicationId)
         handler.connect(port: port)
@@ -2497,42 +3045,6 @@ final class ExtensionManager: NSObject, ObservableObject,
         // (Note: In a production app, we might need to manage these references in a set)
     }
 
-    private func isLikelyOAuthURL(_ url: URL) -> Bool {
-        let host = (url.host ?? "").lowercased()
-        let path = url.path.lowercased()
-        let query = url.query?.lowercased() ?? ""
-
-        // Check for OAuth-related URLs
-        let oauthHosts = [
-            "accounts.google.com", "login.microsoftonline.com",
-            "login.live.com",
-            "appleid.apple.com", "github.com", "gitlab.com", "bitbucket.org",
-            "auth0.com", "okta.com", "onelogin.com", "pingidentity.com",
-            "slack.com", "zoom.us", "login.cloudflareaccess.com",
-            "oauth", "auth", "login", "signin",
-        ]
-
-        // Check if host contains OAuth-related terms
-        if oauthHosts.contains(where: { host.contains($0) }) {
-            return true
-        }
-
-        // Check for OAuth paths and query parameters
-        if path.contains("/oauth") || path.contains("oauth2")
-            || path.contains("/authorize") || path.contains("/signin")
-            || path.contains("/login") || path.contains("/callback")
-        {
-            return true
-        }
-
-        if query.contains("client_id=") || query.contains("redirect_uri=")
-            || query.contains("response_type=") || query.contains("scope=")
-        {
-            return true
-        }
-
-        return false
-    }
 
     // Open the extension's options page (inside a browser tab)
     @available(macOS 15.5, *)
@@ -2541,10 +3053,9 @@ final class ExtensionManager: NSObject, ObservableObject,
         openOptionsPageFor extensionContext: WKWebExtensionContext,
         completionHandler: @escaping (Error?) -> Void
     ) {
-        print("🆕 [DELEGATE] openOptionsPageFor called!")
         let displayName =
             extensionContext.webExtension.displayName ?? "Extension"
-        print("   Extension: \(displayName)")
+        Self.logger.debug("   Extension: \(displayName)")
 
         // Resolve the options page URL. Prefer the SDK property when available.
         let sdkURL = extensionContext.optionsPageURL
@@ -2566,7 +3077,7 @@ final class ExtensionManager: NSObject, ObservableObject,
         }
 
         guard let optionsURL else {
-            print("❌ No options page URL found for extension")
+            Self.logger.error("No options page URL found for extension")
             completionHandler(
                 NSError(
                     domain: "ExtensionManager",
@@ -2580,7 +3091,7 @@ final class ExtensionManager: NSObject, ObservableObject,
             return
         }
 
-        print("✅ Opening options page: \(optionsURL.absoluteString)")
+        Self.logger.info("Opening options page: \(optionsURL.absoluteString)")
 
         // Create a dedicated WebView using the extension's webViewConfiguration so
         // the WebExtensions environment (browser/chrome APIs) is available.
@@ -2619,7 +3130,7 @@ final class ExtensionManager: NSObject, ObservableObject,
                 })?.key,
                 let inst = installedExtensions.first(where: { $0.id == extId })
             else {
-                print("❌ Could not resolve extension for secure file access")
+                Self.logger.error("Could not resolve extension for secure file access")
                 completionHandler(
                     NSError(
                         domain: "ExtensionManager",
@@ -2647,10 +3158,7 @@ final class ExtensionManager: NSObject, ObservableObject,
             if !normalizedOptionsURL.path.hasPrefix(
                 normalizedExtensionRoot.path
             ) {
-                print(
-                    "❌ SECURITY: Options URL outside extension directory: \(normalizedOptionsURL.path)"
-                )
-                print("   Extension root: \(normalizedExtensionRoot.path)")
+                Self.logger.debug("   Extension root: \(normalizedExtensionRoot.path)")
                 completionHandler(
                     NSError(
                         domain: "ExtensionManager",
@@ -2671,9 +3179,7 @@ final class ExtensionManager: NSObject, ObservableObject,
                 )
             )
             if relativePath.contains("..") || relativePath.hasPrefix("/") {
-                print(
-                    "❌ SECURITY: Path traversal attempt detected: \(relativePath)"
-                )
+                Self.logger.error("SECURITY: Path traversal attempt detected: \(relativePath)")
                 completionHandler(
                     NSError(
                         domain: "ExtensionManager",
@@ -2688,9 +3194,6 @@ final class ExtensionManager: NSObject, ObservableObject,
             }
 
             // SECURITY FIX: Only grant access to the extension's specific directory, not parent directories
-            print(
-                "   🔒 SECURITY: Restricting file access to extension directory only: \(extensionRoot.path)"
-            )
             webView.loadFileURL(optionsURL, allowingReadAccessTo: extensionRoot)
         } else {
             // For non-file URLs (http/https), load normally
@@ -2738,16 +3241,15 @@ final class ExtensionManager: NSObject, ObservableObject,
     private func computeOptionsPageURL(for context: WKWebExtensionContext)
         -> URL?
     {
-        print("🔍 [computeOptionsPageURL] Looking for options page...")
-        print("   Extension: \(context.webExtension.displayName ?? "Unknown")")
-        print("   Unique ID: \(context.uniqueIdentifier)")
+        Self.logger.debug("   Extension: \(context.webExtension.displayName ?? "Unknown")")
+        Self.logger.debug("   Unique ID: \(context.uniqueIdentifier)")
 
         // Try to map the context back to our InstalledExtension via dictionary identity
         if let extId = extensionContexts.first(where: { $0.value === context })?
             .key,
             let inst = installedExtensions.first(where: { $0.id == extId })
         {
-            print("   Found installed extension: \(inst.name)")
+            Self.logger.info("Found installed extension: \(inst.name)")
 
             // MV3/MV2: options_ui.page; MV2 legacy: options_page
             var pagePath: String?
@@ -2755,16 +3257,13 @@ final class ExtensionManager: NSObject, ObservableObject,
                 let p = options["page"] as? String, !p.isEmpty
             {
                 pagePath = p
-                print("   Found options_ui.page: \(p)")
+                Self.logger.debug("   Found options_ui.page: \(p)")
             } else if let p = inst.manifest["options_page"] as? String,
                 !p.isEmpty
             {
                 pagePath = p
-                print("   Found options_page: \(p)")
+                Self.logger.debug("   Found options_page: \(p)")
             } else {
-                print(
-                    "   No options page declared in manifest, checking common paths..."
-                )
 
                 // Fallback: Check for common options page paths
                 let commonPaths = [
@@ -2780,7 +3279,7 @@ final class ExtensionManager: NSObject, ObservableObject,
                     if FileManager.default.fileExists(atPath: fullFilePath.path)
                     {
                         pagePath = path
-                        print("   ✅ Found options page at: \(path)")
+                        Self.logger.info("Found options page at: \(path)")
                         break
                     }
                 }
@@ -2790,16 +3289,14 @@ final class ExtensionManager: NSObject, ObservableObject,
                 // Build an extension-scheme URL using the context baseURL
                 let extBase = context.baseURL
                 let optionsURL = extBase.appendingPathComponent(page)
-                print(
-                    "✅ Generated options extension URL: \(optionsURL.absoluteString)"
-                )
+                Self.logger.info("Generated options extension URL: \(optionsURL.absoluteString)")
                 return optionsURL
             } else {
-                print("❌ No options page found in manifest or common paths")
-                print("   Manifest keys: \(inst.manifest.keys.sorted())")
+                Self.logger.error("No options page found in manifest or common paths")
+                Self.logger.debug("   Manifest keys: \(inst.manifest.keys.sorted())")
             }
         } else {
-            print("❌ Could not find installed extension for context")
+            Self.logger.error("Could not find installed extension for context")
         }
         return nil
     }
@@ -2848,6 +3345,8 @@ final class ExtensionManager: NSObject, ObservableObject,
     }
 
     // URL-specific access prompts (used for cross-origin network requests from extension contexts)
+    // Auto-grant URLs that fall within the extension's already-granted host permissions.
+    // Only prompt for URLs the extension has no declared permission for.
     @available(macOS 15.5, *)
     func webExtensionController(
         _ controller: WKWebExtensionController,
@@ -2856,12 +3355,63 @@ final class ExtensionManager: NSObject, ObservableObject,
         for extensionContext: WKWebExtensionContext,
         completionHandler: @escaping (Set<URL>, Date?) -> Void
     ) {
-        // Temporarily grant all requested URLs to unblock background networking for popular extensions
-        // TODO: replace with a user-facing prompt + persistence
-        print(
-            "[ExtensionManager] Granting URL access to: \(urls.map{ $0.absoluteString })"
-        )
-        completionHandler(urls, nil)
+        // Check each URL against the extension's granted permissions
+        var granted = Set<URL>()
+        var needsPrompt = Set<URL>()
+
+        for url in urls {
+            let status = extensionContext.permissionStatus(for: url)
+            if status == .grantedExplicitly || status == .grantedImplicitly {
+                granted.insert(url)
+            } else {
+                needsPrompt.insert(url)
+            }
+        }
+
+        // If all URLs are already covered by granted permissions, auto-approve
+        if needsPrompt.isEmpty {
+            completionHandler(granted, nil)
+            return
+        }
+
+        // Prompt only for URLs not covered by existing permissions
+        let displayName =
+            extensionContext.webExtension.displayName ?? "Extension"
+
+        guard let bm = browserManagerRef else {
+            // No UI available — grant what we can, deny the rest
+            completionHandler(granted, nil)
+            return
+        }
+
+        let urlStrings = needsPrompt.map { $0.absoluteString }.sorted()
+
+        bm.showDialog {
+            StandardDialog(
+                header: { EmptyView() },
+                content: {
+                    ExtensionPermissionView(
+                        extensionName: displayName,
+                        requestedPermissions: [],
+                        optionalPermissions: [],
+                        requestedHostPermissions: urlStrings,
+                        optionalHostPermissions: [],
+                        onGrant: {
+                            bm.closeDialog()
+                            completionHandler(urls, nil)
+                        },
+                        onDeny: {
+                            bm.closeDialog()
+                            completionHandler(granted, nil)
+                        },
+                        extensionLogo: extensionContext.webExtension.icon(
+                            for: .init(width: 64, height: 64)
+                        ) ?? NSImage()
+                    )
+                },
+                footer: { EmptyView() }
+            )
+        }
     }
 
     // MARK: - URL Conversion Helpers
@@ -2872,23 +3422,22 @@ final class ExtensionManager: NSObject, ObservableObject,
         _ urlString: String,
         for context: WKWebExtensionContext
     ) -> URL? {
-        print("🔄 [convertExtensionURLToFileURL] Converting: \(urlString)")
+        Self.logger.debug("🔄 [convertExtensionURLToFileURL] Converting: \(urlString)")
 
         // Extract the path from the extension URL
         guard let url = URL(string: urlString) else {
-            print("   ❌ Invalid URL string")
+            Self.logger.error("Invalid URL string")
             return nil
         }
 
         let path = url.path
-        print("   📂 Extracted path: \(path)")
 
         // Find the corresponding installed extension
         if let extId = extensionContexts.first(where: { $0.value === context })?
             .key,
             let inst = installedExtensions.first(where: { $0.id == extId })
         {
-            print("   📦 Found extension: \(inst.name)")
+            Self.logger.debug("   📦 Found extension: \(inst.name)")
 
             // Build file URL from extension package path
             let extensionURL = URL(fileURLWithPath: inst.packagePath)
@@ -2898,36 +3447,178 @@ final class ExtensionManager: NSObject, ObservableObject,
 
             // Verify the file exists
             if FileManager.default.fileExists(atPath: fileURL.path) {
-                print("   ✅ File exists at: \(fileURL.path)")
+                Self.logger.info("File exists at: \(fileURL.path)")
                 return fileURL
             } else {
-                print("   ❌ File not found at: \(fileURL.path)")
+                Self.logger.error("File not found at: \(fileURL.path)")
             }
         } else {
-            print("   ❌ Could not find installed extension for context")
+            Self.logger.error("Could not find installed extension for context")
         }
 
         return nil
+    }
+
+    // MARK: - Extension Diagnostics
+
+    /// Probe the background webview after load to check for JS-level errors.
+    /// Output goes to Xcode debug console via NSLog for easy visibility.
+    @available(macOS 15.4, *)
+    private func probeBackgroundHealth(for context: WKWebExtensionContext, name: String) {
+        // First probe at 3s, second at 8s (gives boot saga time to complete/fail)
+        for delay in [3.0, 8.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard let bgWV = (context as AnyObject).value(forKey: "_backgroundWebView") as? WKWebView else {
+                    NSLog("[EXT-HEALTH] [\(name)] +\(Int(delay))s: No background webview found")
+                    return
+                }
+
+                bgWV.evaluateJavaScript("""
+                    (function() {
+                        var b = typeof browser !== 'undefined' ? browser : (typeof chrome !== 'undefined' ? chrome : null);
+                        if (!b) return JSON.stringify({error: 'No browser/chrome API available'});
+
+                        var result = {
+                            url: location.href,
+                            apiNamespace: typeof browser !== 'undefined' ? 'browser' : 'chrome',
+                            runtime: !!b.runtime,
+                            runtimeId: b.runtime ? b.runtime.id : null,
+                            alarms: !!b.alarms,
+                            storage: !!b.storage,
+                            storageLocal: !!(b.storage && b.storage.local),
+                            storageSession: !!(b.storage && b.storage.session),
+                            storageSync: !!(b.storage && b.storage.sync),
+                            tabs: !!b.tabs,
+                            scripting: !!b.scripting,
+                            webNavigation: !!b.webNavigation,
+                            permissions: !!b.permissions,
+                            action: !!b.action,
+                            notifications: !!b.notifications,
+                            webRequest: !!b.webRequest,
+                            declarativeNetRequest: !!b.declarativeNetRequest,
+                            contextMenus: !!b.contextMenus,
+                            commands: !!b.commands,
+                            i18n: !!b.i18n,
+                            windows: !!b.windows,
+                        };
+
+                        // Try to detect if there were uncaught errors
+                        try {
+                            if (b.runtime && b.runtime.lastError) {
+                                result.lastError = b.runtime.lastError.message || String(b.runtime.lastError);
+                            }
+                        } catch(e) {}
+
+                        return JSON.stringify(result, null, 2);
+                    })()
+                """) { result, error in
+                    if let json = result as? String {
+                        NSLog("[EXT-HEALTH] [\(name)] +\(Int(delay))s background APIs:\\n\(json)")
+                    } else if let error = error {
+                        NSLog("[EXT-HEALTH] [\(name)] +\(Int(delay))s probe FAILED: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Comprehensive diagnostic for extension content script + messaging state
+    @available(macOS 15.5, *)
+    func diagnoseExtensionState(for webView: WKWebView, url: URL) {
+        guard let controller = extensionController else {
+            Self.logger.debug("No extension controller")
+            return
+        }
+
+        let host = url.host ?? "?"
+        let ctxCount = controller.extensionContexts.count
+        let configCtrl = webView.configuration.webExtensionController
+        let sameCtrl = configCtrl === controller
+
+        Self.logger.debug("\(host): contexts=\(ctxCount), webviewHasCtrl=\(configCtrl != nil), sameCtrl=\(sameCtrl)")
+
+        for (extId, ctx) in extensionContexts {
+            let name = ctx.webExtension.displayName ?? extId
+            let hasBackground = ctx.webExtension.hasBackgroundContent
+            let hasInjected = ctx.webExtension.hasInjectedContent
+            let baseURL = ctx.baseURL
+            let perms = ctx.currentPermissions.map { String(describing: $0) }.joined(separator: ", ")
+            let matchPatterns = ctx.grantedPermissionMatchPatterns.map { String(describing: $0) }.joined(separator: ", ")
+            let urlAccess = ctx.permissionStatus(for: url)
+
+            Self.logger.debug("'\(name)': hasBackground=\(hasBackground), hasInjected=\(hasInjected), baseURL=\(baseURL), urlAccess=\(urlAccess.rawValue)")
+            Self.logger.debug("'\(name)' perms: \(perms)")
+            Self.logger.debug("'\(name)' matchPatterns: \(matchPatterns)")
+
+            // Try to reach background webview via KVC
+            let bgWV = (ctx as AnyObject).value(forKey: "_backgroundWebView") as? WKWebView
+            Self.logger.debug("'\(name)' bgWebView via KVC: \(bgWV != nil ? bgWV!.url?.absoluteString ?? "no-url" : "nil")")
+
+            if let bgWV = bgWV {
+                bgWV.evaluateJavaScript("""
+                    JSON.stringify({
+                        url: location.href,
+                        hasRuntime: typeof chrome !== 'undefined' && typeof chrome.runtime !== 'undefined',
+                        runtimeId: (typeof chrome !== 'undefined' && chrome.runtime) ? chrome.runtime.id : null,
+                        listeners: {
+                            onConnect: typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onConnect ? chrome.runtime.onConnect.hasListeners() : false,
+                            onMessage: typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage ? chrome.runtime.onMessage.hasListeners() : false
+                        }
+                    })
+                """) { result, error in
+                    let logger = Logger(subsystem: "com.nook.browser", category: "Extensions")
+                    if let json = result as? String {
+                        logger.debug("'\(name)' background: \(json)")
+                    } else if let error = error {
+                        logger.debug("'\(name)' background eval error: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+
+        // Check page-side: Dark Reader styles
+        webView.evaluateJavaScript("""
+            JSON.stringify({
+                drCount: document.querySelectorAll('style.darkreader, style[class*="darkreader"]').length,
+                allStyles: document.querySelectorAll('style').length,
+                scripts: document.querySelectorAll('script').length
+            })
+        """) { result, _ in
+            let logger = Logger(subsystem: "com.nook.browser", category: "Extensions")
+            if let json = result as? String {
+                logger.debug("\(host) page: \(json)")
+            }
+        }
+
+        // Check again after 3s to see if content scripts ran and then cleaned up
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            webView.evaluateJavaScript(
+                "'drCount=' + document.querySelectorAll('style[class*=\"darkreader\"]').length"
+            ) { result, _ in
+                let logger = Logger(subsystem: "com.nook.browser", category: "Extensions")
+                logger.debug("\(host) +3s: \(String(describing: result ?? "nil"))")
+            }
+        }
     }
 
     // MARK: - Extension Resource Testing
 
     /// List all installed extensions with their UUIDs for easy testing
     func listInstalledExtensionsForTesting() {
-        print("=== Installed Extensions ===")
+        Self.logger.info("Installed Extensions ===")
 
         if installedExtensions.isEmpty {
-            print("❌ No extensions installed")
+            Self.logger.error("No extensions installed")
             return
         }
 
         for (index, ext) in installedExtensions.enumerated() {
-            print("\(index + 1). \(ext.name)")
-            print("   UUID: \(ext.id)")
-            print("   Version: \(ext.version)")
-            print("   Manifest Version: \(ext.manifestVersion)")
-            print("   Enabled: \(ext.isEnabled)")
-            print("")
+            Self.logger.debug("\(index + 1). \(ext.name)")
+            Self.logger.debug("   UUID: \(ext.id)")
+            Self.logger.debug("   Version: \(ext.version)")
+            Self.logger.debug("   Manifest Version: \(ext.manifestVersion)")
+            Self.logger.info("Enabled: \(ext.isEnabled)")
+            Self.logger.debug("")
         }
     }
 
@@ -2964,7 +3655,7 @@ final class ExtensionManager: NSObject, ObservableObject,
     func popoverDidClose(_ notification: Notification) {
         DispatchQueue.main.async {
             self.isPopupActive = false
-            print("🔒 [ExtensionManager] Popup closed, isPopupActive = false")
+            Self.logger.debug("🔒 [ExtensionManager] Popup closed, isPopupActive = false")
         }
     }
 }
@@ -2973,6 +3664,7 @@ final class ExtensionManager: NSObject, ObservableObject,
 
 @available(macOS 15.4, *)
 class PopupUIDelegate: NSObject, WKUIDelegate, WKNavigationDelegate {
+    private static let logger = Logger(subsystem: "com.nook.browser", category: "ExtensionPopup")
     weak var webView: WKWebView?
     
     init(webView: WKWebView) {
@@ -3007,24 +3699,24 @@ class PopupUIDelegate: NSObject, WKUIDelegate, WKNavigationDelegate {
     #endif
     
     @objc private func reloadPopup() {
-        print("🔄 Reloading extension popup...")
+        Self.logger.debug("🔄 Reloading extension popup...")
         webView?.reload()
     }
     
     // MARK: - WKNavigationDelegate
     
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        print("✅ [POPUP] Navigation finished")
-        print("   Final URL: \(webView.url?.absoluteString ?? "nil")")
+        Self.logger.info("[POPUP] Navigation finished")
+        Self.logger.debug("   Final URL: \(webView.url?.absoluteString ?? "nil")")
     }
     
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        print("❌ [POPUP] Navigation failed: \(error.localizedDescription)")
+        Self.logger.error("[POPUP] Navigation failed: \(error.localizedDescription)")
     }
     
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        print("❌ [POPUP] Provisional navigation failed: \(error.localizedDescription)")
-        print("   URL: \(webView.url?.absoluteString ?? "nil")")
+        Self.logger.error("[POPUP] Provisional navigation failed: \(error.localizedDescription)")
+        Self.logger.debug("   URL: \(webView.url?.absoluteString ?? "nil")")
     }
 }
 
@@ -3043,16 +3735,15 @@ final class WeakAnchor {
 @available(macOS 15.4, *)
 // MARK: - Native Messaging Handler
 
-// MARK: - Native Messaging Handler
-
-@available(macOS 15.4, *)
 class NativeMessagingHandler: NSObject {
+    private static let logger = Logger(subsystem: "com.nook.browser", category: "NativeMessaging")
     let applicationId: String
     private var process: Process?
     private var inputPipe: Pipe?
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
     private weak var port: WKWebExtension.MessagePort?
+    private var outputBuffer = Data()
     
     init(applicationId: String) {
         self.applicationId = applicationId
@@ -3060,20 +3751,61 @@ class NativeMessagingHandler: NSObject {
     }
     
     func sendMessage(_ message: Any, completion: @escaping (Any?, Error?) -> Void) {
-        // Single-shot message: Launch, write, read, exit
+        // Single-shot message: Launch, write, read response, terminate
         launchProcess { [weak self] success in
             guard success, let self = self else {
                 completion(nil, NSError(domain: "NativeMessaging", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to launch host"]))
                 return
             }
-            
+
             do {
+                // Disable the readabilityHandler to avoid conflict with long-lived port mode
+                self.outputPipe?.fileHandleForReading.readabilityHandler = nil
+
                 try self.writeMessage(message)
-                // Read response (implementation simplified for single-shot)
-                // In reality, we'd need to wait for stdout
-                // For now, we'll just acknowledge receipt as many hosts don't reply immediately to single messages
-                completion(["status": "sent"], nil) 
+
+                // Read the response synchronously with a 5-second timeout
+                let readHandle = self.outputPipe?.fileHandleForReading
+                var responseData: Any?
+                var readError: Error?
+                let semaphore = DispatchSemaphore(value: 0)
+
+                DispatchQueue.global(qos: .userInitiated).async {
+                    defer { semaphore.signal() }
+                    guard let handle = readHandle else {
+                        readError = NSError(domain: "NativeMessaging", code: 3, userInfo: [NSLocalizedDescriptionKey: "No output pipe"])
+                        return
+                    }
+
+                    // Read 4-byte length prefix
+                    let lengthData = handle.readData(ofLength: 4)
+                    guard lengthData.count == 4 else {
+                        readError = NSError(domain: "NativeMessaging", code: 4, userInfo: [NSLocalizedDescriptionKey: "Host closed without response"])
+                        return
+                    }
+
+                    let length: UInt32 = lengthData.withUnsafeBytes { $0.load(as: UInt32.self) }
+                    let jsonData = handle.readData(ofLength: Int(length))
+
+                    if let json = try? JSONSerialization.jsonObject(with: jsonData) {
+                        responseData = json
+                    } else {
+                        readError = NSError(domain: "NativeMessaging", code: 5, userInfo: [NSLocalizedDescriptionKey: "Failed to parse host response"])
+                    }
+                }
+
+                let result = semaphore.wait(timeout: .now() + 5)
+                self.terminateProcess()
+
+                if result == .timedOut {
+                    completion(nil, NSError(domain: "NativeMessaging", code: 6, userInfo: [NSLocalizedDescriptionKey: "Host response timed out"]))
+                } else if let error = readError {
+                    completion(nil, error)
+                } else {
+                    completion(responseData, nil)
+                }
             } catch {
+                self.terminateProcess()
                 completion(nil, error)
             }
         }
@@ -3084,23 +3816,21 @@ class NativeMessagingHandler: NSObject {
         
         // Use closure-based handlers since delegate is not available
         port.messageHandler = { [weak self] (port, message) in
-            print("📨 [NativeMessaging] Received message from extension: \(message)")
             do {
                 try self?.writeMessage(message)
             } catch {
-                print("❌ [NativeMessaging] Failed to write to host: \(error)")
+                Self.logger.error("[NativeMessaging] Failed to write to host: \(error)")
             }
         }
         
         port.disconnectHandler = { [weak self] port in
-            print("🔌 [NativeMessaging] Port disconnected")
             self?.terminateProcess()
         }
         
         launchProcess { [weak self] success in
             guard let self = self else { return }
             if !success {
-                print("❌ [NativeMessaging] Failed to launch host for \(self.applicationId)")
+                Self.logger.error("[NativeMessaging] Failed to launch host for \(self.applicationId)")
                 port.disconnect()
             }
         }
@@ -3121,7 +3851,7 @@ class NativeMessagingHandler: NSObject {
         // TODO: Implement full manifest lookup. 
         // For now, we'll log the attempt. If the user has a specific host in mind, we'd need its path.
         
-        print("🚀 [NativeMessaging] Launching host for \(applicationId)...")
+        Self.logger.debug("Launching host for \(self.applicationId)...")
         
         // MOCK: Since we can't easily launch arbitrary binaries from sandbox without entitlements/manifests,
         // we will simulate a successful connection for known hosts to prevent extension errors,
@@ -3137,20 +3867,36 @@ class NativeMessagingHandler: NSObject {
         // Let's try to look in standard paths.
         
         DispatchQueue.global(qos: .userInitiated).async {
-            let paths = [
-                FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Google/Chrome/NativeMessagingHosts/\(self.applicationId).json"),
-                URL(fileURLWithPath: "/Library/Application Support/Google/Chrome/NativeMessagingHosts/\(self.applicationId).json"),
-                FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Mozilla/NativeMessagingHosts/\(self.applicationId).json"),
-                URL(fileURLWithPath: "/Library/Application Support/Mozilla/NativeMessagingHosts/\(self.applicationId).json")
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let manifestName = "\(self.applicationId).json"
+            let browserDirs = [
+                // Nook-specific (highest priority)
+                "Library/Application Support/Nook/NativeMessagingHosts",
+                // Chrome
+                "Library/Application Support/Google/Chrome/NativeMessagingHosts",
+                // Chromium
+                "Library/Application Support/Chromium/NativeMessagingHosts",
+                // Microsoft Edge
+                "Library/Application Support/Microsoft Edge/NativeMessagingHosts",
+                // Brave
+                "Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+                // Firefox / Mozilla
+                "Library/Application Support/Mozilla/NativeMessagingHosts",
             ]
+            var paths: [URL] = []
+            for dir in browserDirs {
+                // User-level
+                paths.append(home.appendingPathComponent(dir).appendingPathComponent(manifestName))
+                // System-level
+                paths.append(URL(fileURLWithPath: "/\(dir)").appendingPathComponent(manifestName))
+            }
             
             for path in paths {
                 if let data = try? Data(contentsOf: path),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let binaryPath = json["path"] as? String {
                     
-                    print("   ✅ Found manifest at \(path.path)")
-                    print("   🎯 Binary path: \(binaryPath)")
+                    Self.logger.info("Found manifest at \(path.path)")
                     
                     // Launch it
                     let process = Process()
@@ -3179,16 +3925,16 @@ class NativeMessagingHandler: NSObject {
                     
                     do {
                         try process.run()
-                        print("   🚀 Process launched!")
+                        Self.logger.debug("   🚀 Process launched!")
                         completion(true)
                         return
                     } catch {
-                        print("   ❌ Failed to launch process: \(error)")
+                        Self.logger.error("Failed to launch process: \(error)")
                     }
                 }
             }
             
-            print("   ⚠️ No manifest found for \(self.applicationId)")
+            Self.logger.debug("   ⚠️ No manifest found for \(self.applicationId)")
             completion(false)
         }
     }
@@ -3202,7 +3948,9 @@ class NativeMessagingHandler: NSObject {
     }
     
     private func writeMessage(_ message: Any) throws {
-        guard let input = inputPipe else { return }
+        guard let input = inputPipe else {
+            throw NSError(domain: "NativeMessaging", code: 2, userInfo: [NSLocalizedDescriptionKey: "No input pipe available — host process not running"])
+        }
         
         let jsonData = try JSONSerialization.data(withJSONObject: message, options: [])
         var length = UInt32(jsonData.count)
@@ -3215,18 +3963,27 @@ class NativeMessagingHandler: NSObject {
     }
     
     private func handleOutput(_ data: Data) {
-        // Parse length-prefixed JSON
-        // This is a stream, so we might get partial data. 
-        // For simplicity in this MVP, we assume we get complete messages or handle basic buffering.
-        // (Real implementation needs a buffer)
-        
-        // Skip length (4 bytes) and parse JSON
-        if data.count > 4 {
-            let jsonRange = 4..<data.count
-            let jsonData = data.subdata(in: jsonRange)
+        outputBuffer.append(data)
+
+        // Process all complete messages in the buffer
+        while outputBuffer.count >= 4 {
+            // Read 4-byte length prefix (native byte order)
+            let length: UInt32 = outputBuffer.withUnsafeBytes { $0.load(as: UInt32.self) }
+            let totalNeeded = 4 + Int(length)
+
+            guard outputBuffer.count >= totalNeeded else {
+                // Wait for more data
+                break
+            }
+
+            let jsonData = outputBuffer.subdata(in: 4..<totalNeeded)
+            outputBuffer.removeSubrange(0..<totalNeeded)
+
             if let json = try? JSONSerialization.jsonObject(with: jsonData) {
-                print("   📥 Received from host: \(json)")
+                Self.logger.debug("Received from host: \(String(describing: json))")
                 port?.sendMessage(json) { _ in }
+            } else {
+                Self.logger.error("Failed to parse JSON from host (\(jsonData.count) bytes)")
             }
         }
     }

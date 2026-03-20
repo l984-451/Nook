@@ -19,30 +19,59 @@ struct NookApp: App {
     @State private var webViewCoordinator = WebViewCoordinator()
     @State private var settingsManager = NookSettingsService()
     @State private var keyboardShortcutManager = KeyboardShortcutManager()
+    @State private var aiConfigService: AIConfigService
+    @State private var mcpManager = MCPManager()
+    @State private var aiService: AIService
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     // TEMPORARY: BrowserManager will be phased out as a global singleton.
     // Eventually each manager (TabManager, etc.) will be independent and injected via environment.
     @StateObject private var browserManager = BrowserManager()
 
+    init() {
+        let config = AIConfigService()
+        _aiConfigService = State(initialValue: config)
+        _aiService = State(initialValue: AIService(configService: config))
+    }
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .background(BackgroundWindowModifier())
-                .ignoresSafeArea(.all)
-                .environmentObject(browserManager)
-                .environment(windowRegistry)
-                .environment(webViewCoordinator)
-                .environment(\.nookSettings, settingsManager)
-                .environment(keyboardShortcutManager)
-                .onAppear {
-                    setupApplicationLifecycle()
-                }
+            TransitionView(showB: $settingsManager.didFinishOnboarding) {
+                OnboardingView()
+                    .ignoresSafeArea(.all)
+                    .background(BackgroundWindowModifier())
+                    .environment(\.nookSettings, settingsManager)
+                    .environmentObject(browserManager)
+            } viewB: {
+                ContentView()
+                    .ignoresSafeArea(.all)
+                    .background(BackgroundWindowModifier())
+                    .environmentObject(browserManager)
+                    .environment(windowRegistry)
+                    .environment(webViewCoordinator)
+                    .environment(\.nookSettings, settingsManager)
+                    .environment(keyboardShortcutManager)
+                    .environment(aiConfigService)
+                    .environment(mcpManager)
+                    .environment(aiService)
+                    .onAppear {
+                        setupApplicationLifecycle()
+                        setupAIServices()
+                    }
+                
+                
+            }
+
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
-            NookCommands(browserManager: browserManager, windowRegistry: windowRegistry)
+            NookCommands(
+                browserManager: browserManager,
+                windowRegistry: windowRegistry,
+                shortcutManager: keyboardShortcutManager
+            )
         }
+
 
         // Native macOS Settings window
         Settings {
@@ -51,10 +80,24 @@ struct NookApp: App {
                 .environmentObject(browserManager.gradientColorManager)
                 .environment(\.nookSettings, settingsManager)
                 .environment(keyboardShortcutManager)
+                .environment(aiConfigService)
+                .environment(mcpManager)
         }
     }
 
     // MARK: - Application Lifecycle Setup
+
+    /// Wires AI services to runtime dependencies (BrowserManager, MCP, etc.)
+    private func setupAIServices() {
+        aiService.browserManager = browserManager
+        aiService.mcpManager = mcpManager
+
+        let toolExecutor = BrowserToolExecutor(browserManager: browserManager)
+        aiService.browserToolExecutor = toolExecutor
+
+        // Start enabled MCP servers
+        mcpManager.startEnabledServers(configs: aiConfigService.mcpServers)
+    }
 
     /// Configures application-level dependencies and callbacks when the first window appears.
     ///
@@ -76,6 +119,7 @@ struct NookApp: App {
         // Connect AppDelegate for termination and updates
         appDelegate.browserManager = browserManager
         appDelegate.windowRegistry = windowRegistry
+        appDelegate.mcpManager = mcpManager
         browserManager.appDelegate = appDelegate
 
         // TEMPORARY: Wire coordinators to BrowserManager
@@ -84,33 +128,55 @@ struct NookApp: App {
         browserManager.windowRegistry = windowRegistry
         browserManager.nookSettings = settingsManager
         browserManager.tabManager.nookSettings = settingsManager
+        browserManager.aiService = aiService
+        browserManager.aiConfigService = aiConfigService
 
         // Configure managers that depend on settings
-        browserManager.compositorManager.setUnloadTimeout(settingsManager.tabUnloadTimeout)
-        browserManager.trackingProtectionManager.setEnabled(settingsManager.blockCrossSiteTracking)
+        browserManager.compositorManager.setUnloadTimeout(
+            settingsManager.tabUnloadTimeout
+        )
+        browserManager.trackingProtectionManager.setEnabled(
+            settingsManager.blockCrossSiteTracking
+        )
 
         // Initialize keyboard shortcut manager
         keyboardShortcutManager.setBrowserManager(browserManager)
+        browserManager.keyboardShortcutManager = keyboardShortcutManager
 
         // Set up window lifecycle callbacks
         windowRegistry.onWindowRegister = { [weak browserManager] windowState in
             browserManager?.setupWindowState(windowState)
         }
 
-        windowRegistry.onWindowClose = { [webViewCoordinator, weak browserManager] windowId in
+        windowRegistry.onWindowClose = {
+            [webViewCoordinator, weak browserManager] windowId in
             // Only cleanup if browserManager still exists (it's captured weakly)
             if let browserManager = browserManager {
-                webViewCoordinator.cleanupWindow(windowId, tabManager: browserManager.tabManager)
+                webViewCoordinator.cleanupWindow(
+                    windowId,
+                    tabManager: browserManager.tabManager
+                )
                 browserManager.splitManager.cleanupWindow(windowId)
+
+                // Clean up incognito window if applicable
+                if let windowState = browserManager.windowRegistry?.windows[windowId],
+                   windowState.isIncognito {
+                    Task {
+                        await browserManager.closeIncognitoWindow(windowState)
+                    }
+                }
             } else {
                 // BrowserManager was deallocated - perform minimal cleanup
                 // Remove compositor container view to prevent leaks
                 webViewCoordinator.removeCompositorContainerView(for: windowId)
-                print("⚠️ [NookApp] Window \(windowId) closed after BrowserManager deallocation - performed minimal cleanup")
+                print(
+                    "⚠️ [NookApp] Window \(windowId) closed after BrowserManager deallocation - performed minimal cleanup"
+                )
             }
         }
 
-        windowRegistry.onActiveWindowChange = { [weak browserManager] windowState in
+        windowRegistry.onActiveWindowChange = {
+            [weak browserManager] windowState in
             browserManager?.setActiveWindowState(windowState)
         }
     }
@@ -152,6 +218,13 @@ struct BackgroundWindowModifier: NSViewRepresentable {
         return view
     }
     func updateNSView(_ nsView: NSView, context: Context) {
-
+        guard let window = nsView.window else { return }
+        // Re-apply titlebar hiding on every update to prevent flash during view transitions
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.standardWindowButton(.closeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
     }
 }
+

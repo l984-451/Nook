@@ -91,19 +91,19 @@ private struct SettingsContent: View {
             }
             .tag(SettingsTabs.shortcuts)
 
-            // DISABLED: Extensions feature temporarily disabled
-            // if #available(macOS 15.5, *), nookSettings.experimentalExtensions {
-            //     SettingsPane {
-            //         ExtensionsSettingsView()
-            //     }
-            //     .tabItem {
-            //         Label(
-            //             SettingsTabs.extensions.name,
-            //             systemImage: SettingsTabs.extensions.icon
-            //         )
-            //     }
-            //     .tag(SettingsTabs.extensions)
-            // }
+            if #available(macOS 15.5, *),
+               let extensionManager = browserManager.extensionManager {
+                SettingsPane {
+                    ExtensionsSettingsView(extensionManager: extensionManager)
+                }
+                .tabItem {
+                    Label(
+                        SettingsTabs.extensions.name,
+                        systemImage: SettingsTabs.extensions.icon
+                    )
+                }
+                .tag(SettingsTabs.extensions)
+            }
 
 
             #if DEBUG
@@ -120,22 +120,6 @@ private struct SettingsContent: View {
             #endif
 
         }
-        // DISABLED: Extensions feature temporarily disabled
-        // .onChange(of: nookSettings.experimentalExtensions) { _, experimentalEnabled in
-        //     // If extensions are disabled and the current tab is extensions, switch to a valid tab
-        //     if !experimentalEnabled && nookSettings.currentSettingsTab == .extensions {
-        //         nookSettings.currentSettingsTab = .advanced
-        //     }
-        //
-        //     // Handle extension state when experimental flag changes
-        //     if experimentalEnabled {
-        //         // Re-enable extensions that were previously enabled
-        //         browserManager.extensionManager?.enableAllExtensions()
-        //     } else {
-        //         // Disable all extensions when experimental support is turned off
-        //         browserManager.extensionManager?.disableAllExtensions()
-        //     }
-        // }
     }
 }
 
@@ -184,6 +168,7 @@ struct SettingsTabItem: View {
 struct GeneralSettingsView: View {
     @EnvironmentObject var browserManager: BrowserManager
     @Environment(\.nookSettings) var nookSettings
+    @State private var showingAddEngine = false
 
     var body: some View {
         @Bindable var settings = nookSettings
@@ -316,15 +301,47 @@ struct GeneralSettingsView: View {
                             Picker(
                                 "Search Engine",
                                 selection: $settings
-                                    .searchEngine
+                                    .searchEngineId
                             ) {
                                 ForEach(SearchProvider.allCases) { provider in
-                                    Text(provider.displayName).tag(provider)
+                                    Text(provider.displayName).tag(provider.rawValue)
+                                }
+                                ForEach(nookSettings.customSearchEngines) { engine in
+                                    Text(engine.name).tag(engine.id.uuidString)
                                 }
                             }
                             .labelsHidden()
                             .pickerStyle(.menu)
                             .frame(width: 220)
+
+                            Button {
+                                showingAddEngine = true
+                            } label: {
+                                Image(systemName: "plus")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+
+                        if let selected = nookSettings.customSearchEngines.first(where: { $0.id.uuidString == nookSettings.searchEngineId }) {
+                            HStack {
+                                Text(selected.name)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Remove") {
+                                    nookSettings.customSearchEngines.removeAll { $0.id == selected.id }
+                                    nookSettings.searchEngineId = SearchProvider.google.rawValue
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .sheet(isPresented: $showingAddEngine) {
+                        CustomSearchEngineEditor { newEngine in
+                            nookSettings.customSearchEngines.append(newEngine)
                         }
                     }
                     
@@ -1117,6 +1134,30 @@ struct ShortcutsSettingsView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
+            
+            // Website shortcut detection toggle
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Detect Website Shortcuts")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    Text("When a website uses the same shortcut, press once for website, twice for Nook")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { WebsiteShortcutProfile.isFeatureEnabled },
+                    set: { WebsiteShortcutProfile.isFeatureEnabled = $0 }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .accessibilityLabel("Detect Website Shortcuts")
+            }
+            .padding(12)
+            .background(Color(.controlBackgroundColor).opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
 
             Divider().opacity(0.4)
 
@@ -1250,6 +1291,9 @@ private struct ShortcutRowView: View {
         .padding(12)
         .background(Color(.controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onChange(of: shortcut) { _, newShortcut in
+            localKeyCombination = newShortcut.keyCombination
+        }
     }
 
     private func updateShortcut() {
@@ -1289,66 +1333,95 @@ private struct CategoryFilterChip: View {
 
 struct ExtensionsSettingsView: View {
     @EnvironmentObject var browserManager: BrowserManager
+    @ObservedObject var extensionManager: ExtensionManager
     @State private var showingInstallDialog = false
+    @State private var safariExtensions: [ExtensionManager.SafariExtensionInfo] = []
+    @State private var isScanningSafari = false
+    @State private var showSafariSection = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if #available(macOS 15.5, *) {
-                if let extensionManager = browserManager.extensionManager {
-                    // Extension management UI
-                    HStack {
-                        Text("Installed Extensions")
-                            .font(.headline)
-                        Spacer()
-                        Button("Install Extension...") {
-                            browserManager.showExtensionInstallDialog()
-                        }
-                        .buttonStyle(.borderedProminent)
+                // Extension management UI
+                HStack {
+                    Text("Installed Extensions")
+                        .font(.headline)
+                    Spacer()
+                    Button("Install Extension...") {
+                        browserManager.showExtensionInstallDialog()
                     }
+                    .buttonStyle(.borderedProminent)
+                }
 
-                    Divider()
+                Divider()
 
-                    if extensionManager.installedExtensions.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "puzzlepiece.extension")
-                                .font(.system(size: 48))
-                                .foregroundColor(.secondary)
-                            Text("No Extensions Installed")
-                                .font(.title2)
-                                .fontWeight(.medium)
-                            Text(
-                                "Install browser extensions to enhance your browsing experience"
-                            )
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        ScrollView {
-                            LazyVStack(spacing: 12) {
-                                ForEach(
-                                    extensionManager.installedExtensions,
-                                    id: \.id
-                                ) { ext in
-                                    ExtensionRowView(extension: ext)
-                                        .environmentObject(browserManager)
-                                }
-                            }
-                            .padding(.vertical)
-                        }
-                    }
-                } else {
+                if extensionManager.installedExtensions.isEmpty && !showSafariSection {
                     VStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle")
+                        Image(systemName: "puzzlepiece.extension")
                             .font(.system(size: 48))
-                            .foregroundColor(.orange)
-                        Text("Extension Manager Unavailable")
+                            .foregroundColor(.secondary)
+                        Text("No Extensions Installed")
                             .font(.title2)
                             .fontWeight(.medium)
-                        Text("Extension support is not properly initialized")
-                            .foregroundColor(.secondary)
+                        Text(
+                            "Install browser extensions to enhance your browsing experience"
+                        )
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(
+                                extensionManager.installedExtensions,
+                                id: \.id
+                            ) { ext in
+                                ExtensionRowView(extension: ext)
+                                    .environmentObject(browserManager)
+                            }
+                        }
+                        .padding(.vertical)
+                    }
+                }
+
+                // Safari Extensions Discovery
+                Divider()
+
+                HStack {
+                    Text("Safari Extensions")
+                        .font(.headline)
+                    Spacer()
+                    if isScanningSafari {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Button("Scan for Safari Extensions") {
+                            scanForSafariExtensions()
+                        }
+                    }
+                }
+
+                if showSafariSection {
+                    if safariExtensions.isEmpty {
+                        Text("No Safari Web Extensions found on this Mac.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        LazyVStack(spacing: 8) {
+                            ForEach(safariExtensions) { ext in
+                                SafariExtensionRowView(
+                                    info: ext,
+                                    isAlreadyInstalled: extensionManager.installedExtensions.contains(where: {
+                                        $0.name == ext.name
+                                    }),
+                                    onInstall: {
+                                        installSafariExtension(ext)
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
             } else {
                 // Unsupported OS version
@@ -1367,6 +1440,79 @@ struct ExtensionsSettingsView: View {
         }
         .padding()
         .frame(minWidth: 520, minHeight: 360)
+    }
+
+    private func scanForSafariExtensions() {
+        isScanningSafari = true
+        showSafariSection = true
+        Task {
+            let found = await extensionManager.discoverSafariExtensions()
+            await MainActor.run {
+                safariExtensions = found
+                isScanningSafari = false
+            }
+        }
+    }
+
+    private func installSafariExtension(_ info: ExtensionManager.SafariExtensionInfo) {
+        extensionManager.installSafariExtension(info) { result in
+            switch result {
+            case .success(let ext):
+                // Remove from available list since it's now installed
+                safariExtensions.removeAll { $0.id == info.id }
+                _ = ext // suppress unused warning
+            case .failure(let error):
+                let alert = NSAlert()
+                alert.messageText = "Failed to Install Safari Extension"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        }
+    }
+}
+
+@available(macOS 15.5, *)
+struct SafariExtensionRowView: View {
+    let info: ExtensionManager.SafariExtensionInfo
+    let isAlreadyInstalled: Bool
+    let onInstall: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "safari")
+                .font(.system(size: 20))
+                .foregroundColor(.blue)
+                .frame(width: 32, height: 32)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(info.name)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(info.appPath.lastPathComponent)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if isAlreadyInstalled {
+                Text("Installed")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Button("Install") {
+                    onInstall()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -1455,27 +1601,6 @@ struct AdvancedSettingsView: View {
         @Bindable var settings = nookSettings
         return
         VStack(alignment: .leading, spacing: 16) {
-            // DISABLED: Extensions feature temporarily disabled
-            // if #available(macOS 15.5, *) {
-            //     SettingsSectionCard(
-            //         title: "Experimental Features",
-            //         subtitle: "Features in development"
-            //     ) {
-            //         Toggle(
-            //             isOn: $settings.experimentalExtensions
-            //         ) {
-            //             VStack(alignment: .leading, spacing: 2) {
-            //                 Text("EXPERIMENTAL: Enable Extension Support")
-            //                 Text(
-            //                     "Enable browser extension support. Extensions are experimental and may cause instability or security issues."
-            //                 )
-            //                 .font(.caption)
-            //                 .foregroundStyle(.secondary)
-            //             }
-            //         }
-            //     }
-            // }
-
             #if DEBUG
             SettingsSectionCard(
                 title: "Debug Options",
@@ -1644,6 +1769,150 @@ struct SettingsPlaceholderView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 20)
+    }
+}
+
+// MARK: - Site Search Settings
+
+struct SiteSearchSettingsCard: View {
+    @Environment(\.nookSettings) var nookSettings
+    @State private var showingAddSheet = false
+    @State private var editingEntry: SiteSearchEntry? = nil
+
+    var body: some View {
+        @Bindable var settings = nookSettings
+        SettingsSectionCard(
+            title: "Site Search",
+            subtitle: "Tab-to-Search shortcuts for quick site searches"
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(nookSettings.siteSearchEntries) { entry in
+                    HStack(spacing: 10) {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(entry.color)
+                            .frame(width: 14, height: 14)
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(entry.name)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            Text(entry.domain)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        Button {
+                            editingEntry = entry
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        Button {
+                            nookSettings.siteSearchEntries.removeAll { $0.id == entry.id }
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .padding(8)
+                    .background(Color(.controlBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        showingAddSheet = true
+                    } label: {
+                        Label("Add Site", systemImage: "plus")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Spacer()
+
+                    Button("Reset to Defaults") {
+                        nookSettings.siteSearchEntries = SiteSearchEntry.defaultSites
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .sheet(isPresented: $showingAddSheet) {
+            SiteSearchEntryEditor(entry: nil) { newEntry in
+                nookSettings.siteSearchEntries.append(newEntry)
+            }
+        }
+        .sheet(item: $editingEntry) { entry in
+            SiteSearchEntryEditor(entry: entry) { updated in
+                if let idx = nookSettings.siteSearchEntries.firstIndex(where: { $0.id == updated.id }) {
+                    nookSettings.siteSearchEntries[idx] = updated
+                }
+            }
+        }
+    }
+}
+
+struct SiteSearchEntryEditor: View {
+    let entry: SiteSearchEntry?
+    let onSave: (SiteSearchEntry) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String = ""
+    @State private var domain: String = ""
+    @State private var searchURLTemplate: String = ""
+    @State private var colorHex: String = "#666666"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(entry == nil ? "Add Site Search" : "Edit Site Search")
+                .font(.headline)
+
+            Form {
+                TextField("Name", text: $name)
+                TextField("Domain (e.g. youtube.com)", text: $domain)
+                TextField("Search URL (use {query})", text: $searchURLTemplate)
+                TextField("Color Hex (e.g. #E62617)", text: $colorHex)
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(.bordered)
+                Button("Save") {
+                    let saved = SiteSearchEntry(
+                        id: entry?.id ?? UUID(),
+                        name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                        domain: domain.trimmingCharacters(in: .whitespacesAndNewlines),
+                        searchURLTemplate: searchURLTemplate.trimmingCharacters(in: .whitespacesAndNewlines),
+                        colorHex: colorHex.trimmingCharacters(in: .whitespacesAndNewlines)
+                    )
+                    onSave(saved)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(name.isEmpty || domain.isEmpty || searchURLTemplate.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 450)
+        .onAppear {
+            if let entry {
+                name = entry.name
+                domain = entry.domain
+                searchURLTemplate = entry.searchURLTemplate
+                colorHex = entry.colorHex
+            }
+        }
     }
 }
 

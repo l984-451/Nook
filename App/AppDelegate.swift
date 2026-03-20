@@ -34,9 +34,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     // Window registry for accessing active window state
     weak var windowRegistry: WindowRegistry?
 
+    // MCP Manager reference for cleanup on termination
+    var mcpManager: MCPManager?
+
     private let urlEventClass = AEEventClass(kInternetEventClass)
     private let urlEventID = AEEventID(kAEGetURL)
     private var mouseEventMonitor: Any?
+    private let userDefaults = UserDefaults.standard
+    
+
 
     // MARK: - Sparkle Updates
 
@@ -51,6 +57,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupURLEventHandling()
         setupMouseButtonHandling()
+        let didFinishOnboarding = userDefaults.bool(forKey: "settings.didFinishOnboarding")
+
+        if let window = NSApplication.shared.windows.first {
+            // Always hide titlebar immediately to prevent flash during transitions
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.toolbar?.isVisible = false
+            window.standardWindowButton(.closeButton)?.isHidden = true
+            window.standardWindowButton(.zoomButton)?.isHidden = true
+            window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+
+            if !didFinishOnboarding {
+                window.setContentSize(NSSize(width: 1200, height: 720))
+                window.center()
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.hideOtherApplications(nil)
+            }
+        }
     }
 
     /// Registers handler for external URL events (e.g., clicking links from other apps)
@@ -125,17 +149,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     ///
     /// - Returns: Always returns `.terminateLater` to handle termination asynchronously
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        let reason = NSAppleEventManager.shared()
-            .currentAppleEvent?
-            .attributeDescriptor(forKeyword: kAEQuitReason)
-
-        switch reason?.enumCodeValue {
-        case nil:
-            handleTermination(sender: sender, shouldTerminate: true)
-        default:
-            handleTermination(sender: sender, shouldTerminate: true)
+        // When "warn before quitting" is disabled, terminate(nil) is called directly
+        // from the SwiftUI CommandGroup button action. Returning .terminateLater in that
+        // context deadlocks because the async Task can't execute during the termination
+        // run loop mode. Since the user opted out of the warning, just quit immediately.
+        let askBeforeQuit = userDefaults.bool(forKey: "settings.askBeforeQuit")
+        if !askBeforeQuit {
+            return .terminateNow
         }
 
+        handleTermination(sender: sender, shouldTerminate: true)
         return .terminateLater
     }
 
@@ -212,6 +235,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // Keep minimal to avoid MainActor deadlocks; main work happens in applicationShouldTerminate
         AppDelegate.log.info("applicationWillTerminate called")
+
+        // Stop MCP child processes synchronously (blocking up to 5 seconds)
+        mcpManager?.stopAllSync()
     }
 
     // MARK: - External URL Handling

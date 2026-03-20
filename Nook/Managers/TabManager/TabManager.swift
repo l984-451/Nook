@@ -419,8 +419,8 @@ class TabManager: ObservableObject {
     private let context: ModelContext
     private let persistence: PersistenceActor
 
-    // Tab closure undo tracking
-    private var recentlyClosedTabs: [(tab: Tab, spaceId: UUID?, timestamp: Date)] = []
+    // Tab closure undo tracking - stores snapshot of tab state at closure time
+    private var recentlyClosedTabs: [(tab: Tab, spaceId: UUID?, currentURL: URL?, canGoBack: Bool, canGoForward: Bool, timestamp: Date)] = []
     private let undoDuration: TimeInterval = 20.0 // 20 seconds
     private var undoTimer: Timer?
 
@@ -1077,6 +1077,10 @@ class TabManager: ObservableObject {
         print("🔄 Setting currentTab from \(previous?.name ?? "nil") to \(tab.name)")
         currentTab = tab
         print("✅ currentTab set successfully to: \(currentTab?.name ?? "nil")")
+        
+        // Update website shortcut detector with the new tab's URL
+        browserManager?.keyboardShortcutManager?.websiteShortcutDetector.updateCurrentURL(tab.url)
+        
         // Do not auto-exit split when leaving split panes; preserve split state
 
         // Update active side in split view for all windows that contain this tab
@@ -1144,14 +1148,15 @@ class TabManager: ObservableObject {
         url: String = "https://www.google.com",
         in space: Space? = nil
     ) -> Tab {
-        let engine = nookSettings?.searchEngine ?? .google
-        let normalizedUrl = normalizeURL(url, provider: engine)
+        let settings = nookSettings ?? browserManager?.nookSettings
+        let template = settings?.resolvedSearchEngineTemplate ?? SearchProvider.google.queryTemplate
+        let normalizedUrl = normalizeURL(url, queryTemplate: template)
         guard let validURL = URL(string: normalizedUrl)
         else {
             print("Invalid URL: \(url). Falling back to default.")
             return createNewTab(in: space)
         }
-        
+
         let targetSpace: Space? = space ?? currentSpace ?? ensureDefaultSpaceIfNeeded()
         // Ensure the target space has a profile assignment; backfill from currentProfile if missing
         if let ts = targetSpace, ts.profileId == nil {
@@ -1162,7 +1167,7 @@ class TabManager: ObservableObject {
             }
         }
         let sid = targetSpace?.id
-        
+
         // Get existing tabs and increment their indices to make room for new tab at top
         let existingTabs = sid.flatMap { tabsBySpace[$0] } ?? []
         let incrementedTabs = existingTabs.map { tab in
@@ -1187,6 +1192,35 @@ class TabManager: ObservableObject {
         setActiveTab(newTab)
         return newTab
     }
+    
+    // MARK: - Ephemeral Tab Creation (Incognito)
+    
+    /// Create a new ephemeral tab in an incognito window
+    /// These tabs are NOT persisted and are stored in window state
+    @discardableResult
+    func createEphemeralTab(
+        url: URL,
+        in windowState: BrowserWindowState,
+        profile: Profile
+    ) -> Tab {
+        let newTab = Tab(
+            url: url,
+            name: url.host ?? "New Tab",
+            favicon: "globe",
+            spaceId: nil,
+            index: 0,
+            browserManager: browserManager
+        )
+        newTab.profileId = profile.id
+        
+        // Add to window's ephemeral tabs (NOT to persistent tabs)
+        windowState.ephemeralTabs.append(newTab)
+        windowState.currentTabId = newTab.id
+        
+        print("🔒 [TabManager] Created ephemeral tab: \(newTab.id) in window: \(windowState.id)")
+        
+        return newTab
+    }
 
     // Create a new tab with an existing WebView (used for Peek transfers)
     @discardableResult
@@ -1195,8 +1229,9 @@ class TabManager: ObservableObject {
         in space: Space? = nil,
         existingWebView: WKWebView? = nil
     ) -> Tab {
-        let engine = nookSettings?.searchEngine ?? .google
-        let normalizedUrl = normalizeURL(url, provider: engine)
+        let settings = nookSettings ?? browserManager?.nookSettings
+        let template = settings?.resolvedSearchEngineTemplate ?? SearchProvider.google.queryTemplate
+        let normalizedUrl = normalizeURL(url, queryTemplate: template)
         guard let validURL = URL(string: normalizedUrl)
         else {
             print("Invalid URL: \(url). Falling back to default.")
@@ -2122,7 +2157,10 @@ class TabManager: ObservableObject {
                 self.currentTab = defaultTab
             }
 
-            if let ct = self.currentTab { _ = ct.webView }
+            // REMOVED: Forcing lazy webView creation here caused duplicate WebViews
+            // The WebView should only be created when the window actually displays the tab
+            // if let ct = self.currentTab { _ = ct.webView }
+            
             print(
                 "Current Space: \(currentSpace?.name ?? "None"), Tab: \(currentTab?.name ?? "None")"
             )
@@ -2305,7 +2343,10 @@ extension TabManager {
                 self.currentTab = match
             }
         }
-        if let ct = self.currentTab { _ = ct.webView }
+        // REMOVED: Forcing lazy webView creation here caused duplicate WebViews
+        // The WebView should only be created when the window actually displays the tab
+        // if let ct = self.currentTab { _ = ct.webView }
+        
         // Inform the extension controller about existing tabs and the active tab
         if #available(macOS 15.5, *) {
             for t in (self.pinnedTabs + spacePinned + self.tabs) where t.didNotifyOpenToExtensions == false {
@@ -2460,12 +2501,26 @@ extension TabManager {
         // Update last tab closure time
         lastTabClosureTime = now
 
+        // Capture the ACTUAL current state at closure time
+        // This ensures undo restores to the same page as browser restart would
+        let canGoBack = tab.canGoBack
+        let canGoForward = tab.canGoForward
+
+        // Use tab.url which is reliably updated via didCommit/didFinish navigation delegates
+        // Note: tab.webView?.url can be stale/incorrect, especially after SPA navigation
+        let urlToRestore = tab.url
+        let currentURL = tab.url  // For consistency in storage tuple
+
+        // Capture current title for restoration (favicon will be re-fetched)
+        let titleToRestore = tab.name
+
+
         // Create a deep copy of the tab for restoration
         let tabCopy = Tab(
             id: UUID(), // New ID for the restored tab
-            url: tab.url,
-            name: tab.name,
-            favicon: "globe", // Default icon, will be updated when tab loads
+            url: urlToRestore,
+            name: titleToRestore,
+            favicon: "globe", // Default favicon, will be updated when tab loads
             spaceId: spaceId,
             index: tab.index
         )
@@ -2476,7 +2531,15 @@ extension TabManager {
         tabCopy.isSpacePinned = tab.isSpacePinned
         tabCopy.folderId = tab.folderId
 
-        recentlyClosedTabs.append((tab: tabCopy, spaceId: spaceId, timestamp: now))
+        // Store snapshot with navigation state for accurate restoration
+        recentlyClosedTabs.append((
+            tab: tabCopy,
+            spaceId: spaceId,
+            currentURL: currentURL,
+            canGoBack: canGoBack,
+            canGoForward: canGoForward,
+            timestamp: now
+        ))
 
         // Schedule cleanup of expired tabs
         scheduleUndoTimerCleanup()
@@ -2493,13 +2556,25 @@ extension TabManager {
         // Update last tab closure time for cooldown
         lastTabClosureTime = now
 
-        // Create deep copies of all tabs for restoration
+        // Create deep copies of all tabs for restoration with current state snapshot
         for (tab, spaceId) in tabs {
+            // Capture the ACTUAL current state at closure time
+            let canGoBack = tab.canGoBack
+            let canGoForward = tab.canGoForward
+
+            // Use tab.url which is reliably updated via didCommit/didFinish navigation delegates
+            // Note: tab.webView?.url can be stale/incorrect, especially after SPA navigation
+            let urlToRestore = tab.url
+            let currentURL = tab.url  // For consistency in storage tuple
+
+            // Capture current title for restoration (favicon will be re-fetched)
+            let titleToRestore = tab.name
+
             let tabCopy = Tab(
                 id: UUID(), // New ID for the restored tab
-                url: tab.url,
-                name: tab.name,
-                favicon: "globe", // Default icon, will be updated when tab loads
+                url: urlToRestore,
+                name: titleToRestore,
+                favicon: "globe", // Default favicon, will be updated when tab loads
                 spaceId: spaceId,
                 index: tab.index
             )
@@ -2510,7 +2585,15 @@ extension TabManager {
             tabCopy.isSpacePinned = tab.isSpacePinned
             tabCopy.folderId = tab.folderId
 
-            recentlyClosedTabs.append((tab: tabCopy, spaceId: spaceId, timestamp: now))
+            // Store snapshot with navigation state for accurate restoration
+            recentlyClosedTabs.append((
+                tab: tabCopy,
+                spaceId: spaceId,
+                currentURL: currentURL,
+                canGoBack: canGoBack,
+                canGoForward: canGoForward,
+                timestamp: now
+            ))
         }
 
         // Schedule cleanup of expired tabs
@@ -2535,8 +2618,13 @@ extension TabManager {
 
         let mostRecent = recentlyClosedTabs.removeLast()
 
-        // Restore the tab
+        // Apply navigation state BEFORE addTab to ensure it's available when webView is created
+        mostRecent.tab.restoredCanGoBack = mostRecent.canGoBack
+        mostRecent.tab.restoredCanGoForward = mostRecent.canGoForward
+
+        // Restore the tab with its navigation state from when it was closed
         addTab(mostRecent.tab)
+
         setActiveTab(mostRecent.tab)
 
         // Clear the timer if no more tabs to undo
@@ -2553,6 +2641,11 @@ extension TabManager {
             guard !recentlyClosedTabs.isEmpty else { break }
             let tabInfo = recentlyClosedTabs.removeLast()
             restoredTabs.append(tabInfo.tab)
+
+            // Apply navigation state to match what the user saw when tab was closed
+            tabInfo.tab.restoredCanGoBack = tabInfo.canGoBack
+            tabInfo.tab.restoredCanGoForward = tabInfo.canGoForward
+
             addTab(tabInfo.tab)
         }
 

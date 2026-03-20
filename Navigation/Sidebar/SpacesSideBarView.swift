@@ -55,6 +55,8 @@ struct SpacesSideBarView: View {
         }
     }
 
+    @ObservedObject private var dragSession = NookDragSessionManager.shared
+
     private var mainSidebarContent: some View {
         let effectiveProfileId = windowState.currentProfileId ?? browserManager.currentProfile?.id
         let essentialsCount = effectiveProfileId.map { browserManager.tabManager.essentialTabs(for: $0).count } ?? 0
@@ -66,15 +68,17 @@ struct SpacesSideBarView: View {
                 .environmentObject(browserManager)
                 .environment(windowState)
 
-            // Pinned tabs grid
-            PinnedGrid(
-                width: windowState.sidebarContentWidth,
-                profileId: effectiveProfileId
-            )
-            .environmentObject(browserManager)
-            .environment(windowState)
-            .padding(.horizontal, 8)
-            .modifier(FallbackDropBelowEssentialsModifier())
+            // Pinned tabs grid (hidden in incognito)
+            if !windowState.isIncognito {
+                PinnedGrid(
+                    width: windowState.sidebarContentWidth,
+                    profileId: effectiveProfileId
+                )
+                .environmentObject(browserManager)
+                .environment(windowState)
+                .padding(.horizontal, 8)
+                .modifier(FallbackDropBelowEssentialsModifier())
+            }
 
             // Spaces page view with draggable spacer
             ZStack {
@@ -119,16 +123,44 @@ struct SpacesSideBarView: View {
         }
         .padding(.top, 8)
         .padding(.bottom, 8)
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear {
+                        updateSidebarScreenFrame(geo)
+                    }
+                    .onChange(of: geo.frame(in: .global)) { _, _ in
+                        updateSidebarScreenFrame(geo)
+                    }
+            }
+        )
         .animation(
             shouldAnimate ? .easeInOut(duration: 0.18) : nil,
             value: essentialsCount
         )
     }
 
+    private func updateSidebarScreenFrame(_ geo: GeometryProxy) {
+        let frame = geo.frame(in: .global)
+        guard let window = windowState.window ?? NSApp.windows.first(where: { $0.isVisible }),
+              let contentView = window.contentView else { return }
+        let appKitY = contentView.bounds.height - frame.maxY
+        let bottomLeft = NSPoint(x: frame.origin.x, y: appKitY)
+        let screenBottomLeft = window.convertPoint(toScreen: bottomLeft)
+        dragSession.sidebarScreenFrame = CGRect(
+            x: screenBottomLeft.x,
+            y: screenBottomLeft.y,
+            width: frame.width,
+            height: frame.height
+        )
+    }
+
     // MARK: - Spaces Page View
 
     private var spacesPageView: some View {
-        let spaces = browserManager.tabManager.spaces
+        let spaces = windowState.isIncognito
+            ? windowState.ephemeralSpaces
+            : browserManager.tabManager.spaces
 
         return Group {
             if spaces.isEmpty {
@@ -392,6 +424,14 @@ struct SpacesSideBarView: View {
     }
 
     private func resolveCurrentSpace() -> Space? {
+        // For incognito windows, use ephemeral spaces
+        if windowState.isIncognito {
+            if let currentId = windowState.currentSpaceId {
+                return windowState.ephemeralSpaces.first { $0.id == currentId }
+            }
+            return windowState.ephemeralSpaces.first
+        }
+        
         if let current = browserManager.tabManager.currentSpace {
             return current
         }
