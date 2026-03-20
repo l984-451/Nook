@@ -19,7 +19,7 @@ final class ExtensionManager: NSObject, ObservableObject,
     WKWebExtensionControllerDelegate, NSPopoverDelegate
 {
     static let shared = ExtensionManager()
-    private static let logger = Logger(subsystem: "com.nook.browser", category: "Extensions")
+    nonisolated private static let logger = Logger(subsystem: "com.nook.browser", category: "Extensions")
 
     @Published var installedExtensions: [InstalledExtension] = []
     @Published var isExtensionSupportAvailable: Bool = false
@@ -1559,12 +1559,13 @@ final class ExtensionManager: NSObject, ObservableObject,
 
         // Start the background service worker so it can handle
         // messages from popup and content scripts.
-        extensionContext.loadBackgroundContent { [weak self] error in
-            if let error {
-                Self.logger.error("Background load failed for new extension: \(error.localizedDescription, privacy: .public)")
-            } else {
+        Task { @MainActor [weak self] in
+            do {
+                try await extensionContext.loadBackgroundContent()
                 Self.logger.info("Background content loaded for new extension")
                 self?.probeBackgroundHealth(for: extensionContext, name: "new extension")
+            } catch {
+                Self.logger.error("Background load failed for new extension: \(error.localizedDescription, privacy: .public)")
             }
         }
 
@@ -2082,26 +2083,32 @@ final class ExtensionManager: NSObject, ObservableObject,
         // Load enabled extensions — parse manifests in parallel, then register sequentially
         Task { @MainActor in
             // Phase 1: Parse all extensions in parallel (I/O-bound)
+            // Extract Sendable values from PersistentModel entities before crossing actor boundary
+            let entityIndex = Dictionary(uniqueKeysWithValues: enabledEntities.map { ($0.0.packagePath, $0.0) })
             let parsed: [(ExtensionEntity, WKWebExtension)] = await withTaskGroup(
-                of: (ExtensionEntity, WKWebExtension)?.self
+                of: (String, String, WKWebExtension)?.self
             ) { group in
                 for (entity, _) in enabledEntities {
+                    let packagePath = entity.packagePath
+                    let name = entity.name
                     group.addTask {
-                        let resourceURL = URL(fileURLWithPath: entity.packagePath)
+                        let resourceURL = URL(fileURLWithPath: packagePath)
                         do {
                             let ext = try await WKWebExtension(resourceBaseURL: resourceURL)
-                            return (entity, ext)
+                            return (packagePath, name, ext)
                         } catch {
-                            Self.logger.error("Failed to load extension '\(entity.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
+                            Self.logger.error("Failed to load extension '\(name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
                             return nil
                         }
                     }
                 }
-                var results: [(ExtensionEntity, WKWebExtension)] = []
+                var results: [(String, String, WKWebExtension)] = []
                 for await result in group {
                     if let r = result { results.append(r) }
                 }
                 return results
+            }.compactMap { (path, _, ext) in
+                entityIndex[path].map { ($0, ext) }
             }
 
             // Phase 2: Register contexts sequentially (must be on MainActor)
@@ -2149,15 +2156,15 @@ final class ExtensionManager: NSObject, ObservableObject,
 
                 // Start background service worker if the extension has one
                 if webExtension.hasBackgroundContent {
-                    extensionContext.loadBackgroundContent(completionHandler: { [weak self] error in
-                        if let error {
-                            Self.logger.error("Background content failed for '\(entity.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
-                        } else {
+                    Task { @MainActor [weak self] in
+                        do {
+                            try await extensionContext.loadBackgroundContent()
                             Self.logger.info("Background content started for '\(entity.name, privacy: .public)'")
-                            // Probe background webview for JS errors after a short delay
                             self?.probeBackgroundHealth(for: extensionContext, name: entity.name)
+                        } catch {
+                            Self.logger.error("Background content failed for '\(entity.name, privacy: .public)': \(error.localizedDescription, privacy: .public)")
                         }
-                    })
+                    }
                 }
 
                 Self.logger.info("Loaded '\(entity.name, privacy: .public)' — contexts: \(self.extensionController?.extensionContexts.count ?? 0, privacy: .public)")
@@ -2351,15 +2358,17 @@ final class ExtensionManager: NSObject, ObservableObject,
             object: anchorView,
             queue: .main
         ) { [weak self, weak anchorView] _ in
-            guard let anchorView else { return }
-            if let idx = self?.actionAnchors[extensionId]?.firstIndex(
-                where: { $0.view === anchorView }
-            ) {
-                let updated = WeakAnchor(
-                    view: anchorView,
-                    window: anchorView.window
-                )
-                self?.actionAnchors[extensionId]?[idx] = updated
+            MainActor.assumeIsolated {
+                guard let anchorView else { return }
+                if let idx = self?.actionAnchors[extensionId]?.firstIndex(
+                    where: { $0.view === anchorView }
+                ) {
+                    let updated = WeakAnchor(
+                        view: anchorView,
+                        window: anchorView.window
+                    )
+                    self?.actionAnchors[extensionId]?[idx] = updated
+                }
             }
         }
         anchorObserverTokens[extensionId]?.append(token)
@@ -3028,7 +3037,7 @@ final class ExtensionManager: NSObject, ObservableObject,
     @available(macOS 15.5, *)
     func webExtensionController(
         _ controller: WKWebExtensionController,
-        connectUsingMessagePort port: WKWebExtension.MessagePort,
+        connectUsing port: WKWebExtension.MessagePort,
         for extensionContext: WKWebExtensionContext
     ) {
         guard let applicationId = port.applicationIdentifier else {
@@ -3819,7 +3828,7 @@ class NativeMessagingHandler: NSObject {
             do {
                 try self?.writeMessage(message)
             } catch {
-                Self.logger.error("[NativeMessaging] Failed to write to host: \(error)")
+                Self.logger.error("[NativeMessaging] Failed to write to host: \(error.localizedDescription, privacy: .public)")
             }
         }
         
@@ -3929,7 +3938,7 @@ class NativeMessagingHandler: NSObject {
                         completion(true)
                         return
                     } catch {
-                        Self.logger.error("Failed to launch process: \(error)")
+                        Self.logger.error("Failed to launch process: \(error.localizedDescription, privacy: .public)")
                     }
                 }
             }

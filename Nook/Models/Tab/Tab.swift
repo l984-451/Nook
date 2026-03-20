@@ -443,20 +443,10 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         // Optimized: Only remove boost scripts, preserve other user scripts
         // This is much faster than removing all scripts and re-adding them
         if !currentBoostScripts.isEmpty {
-            // Remove only the boost scripts we previously added
-            // Compare by source content since WKUserScript doesn't conform to Equatable
-            let allScripts = userContentController.userScripts
+            // Remove all user scripts — selectively re-adding non-boost scripts
+            // was causing crashes on boosted pages, so we clear everything and
+            // re-inject fresh boost scripts below.
             userContentController.removeAllUserScripts()
-            
-            // Re-add only non-boost scripts (those not in our tracked list)
-            let boostScriptSources = Set(currentBoostScripts.map { $0.source })
-//            for script in allScripts {
-//                if !boostScriptSources.contains(script.source) {
-//                    userContentController.addUserScript(script)
-//                }
-//            }
-// MARK: This causes the browser to crash when loading boosted pages
-            
             currentBoostScripts.removeAll()
         } else {
             // First time setup - still need to check for any existing boost scripts

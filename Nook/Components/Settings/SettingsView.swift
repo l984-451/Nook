@@ -1599,8 +1599,7 @@ struct AdvancedSettingsView: View {
 
     var body: some View {
         @Bindable var settings = nookSettings
-        return
-        VStack(alignment: .leading, spacing: 16) {
+        return VStack(alignment: .leading, spacing: 16) {
             #if DEBUG
             SettingsSectionCard(
                 title: "Debug Options",

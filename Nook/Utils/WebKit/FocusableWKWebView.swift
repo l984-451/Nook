@@ -1,5 +1,5 @@
 import AppKit
-import UserNotifications
+@preconcurrency import UserNotifications
 import WebKit
 import UniformTypeIdentifiers
 
@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 final class FocusableWKWebView: WKWebView {
     weak var owningTab: Tab?
     var contextMenuBridge: WebContextMenuBridge?
-    private static let imageContentTypes: [UTType] = [
+    nonisolated private static let imageContentTypes: [UTType] = [
         .jpeg, .png, .gif, .bmp, .tiff, .webP, .heic, .heif
     ]
 
@@ -178,9 +178,10 @@ final class FocusableWKWebView: WKWebView {
     }
 
     private func postUserNotification(title: String, message: String) {
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
-            guard granted else { return }
+        Task {
+            let center = UNUserNotificationCenter.current()
+            let granted = try? await center.requestAuthorization(options: [.alert, .sound])
+            guard granted == true else { return }
 
             let content = UNMutableNotificationContent()
             content.title = title
@@ -192,7 +193,7 @@ final class FocusableWKWebView: WKWebView {
                 content: content,
                 trigger: UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
             )
-            center.add(request, withCompletionHandler: nil)
+            try? await center.add(request)
         }
     }
 

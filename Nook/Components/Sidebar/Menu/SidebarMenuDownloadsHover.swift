@@ -256,7 +256,7 @@ struct SidebarMenuHoverDownloadItem: View {
                         forTypeIdentifier: utType.identifier,
                         visibility: .all
                     ) { completion in
-                        completion(fileData, nil)
+                        Task { @MainActor in completion(fileData, nil) }
                         return nil
                     }
                 }

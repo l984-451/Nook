@@ -5,7 +5,7 @@
 //
 
 import SwiftUI
-import AppKit
+@preconcurrency import AppKit
 import Combine
 
 // MARK: - Pending Drop
