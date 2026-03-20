@@ -40,8 +40,8 @@ final class ExtensionManager: NSObject, ObservableObject,
     internal var windowAdapter: ExtensionWindowAdapter?
     weak var browserManagerRef: BrowserManager?
     // Whether to auto-resize extension action popovers to content. Disabled per UX preference.
-    // UI delegate for popup context menus
-    private var popupUIDelegate: PopupUIDelegate?
+    // UI delegate for popup context menus and navigation
+    var popupUIDelegate: PopupUIDelegate?
     // No preference for action popups-as-tabs; keep native popovers per Apple docs
 
     let context: ModelContext

@@ -23,7 +23,7 @@ extension ExtensionManager {
         completionHandler: @escaping (Error?) -> Void
     ) {
         let extName = extensionContext.webExtension.displayName ?? "?"
-        Self.logger.info("presentActionPopup delegate called for '\(extName, privacy: .public)'")
+        Self.logger.info("presentActionPopup for '\(extName, privacy: .public)'")
 
         // Grant ALL the extension's requested + optional permissions so the popup
         // can use chrome.tabs, chrome.runtime, etc. without hanging.
@@ -41,23 +41,24 @@ extension ExtensionManager {
             extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
         }
 
-        Self.logger.debug("Granted permissions: \(extensionContext.currentPermissions.map { String(describing: $0) }.joined(separator: ", "), privacy: .public)")
+        Self.logger.debug("Granted \(extensionContext.currentPermissions.count) permissions for '\(extName, privacy: .public)'")
 
         // Ensure background service worker is alive before showing the popup.
         // MV3 workers auto-terminate after ~5 min of inactivity; if the popup
         // tries chrome.runtime.sendMessage and the worker is dead, it hangs forever.
         if extensionContext.webExtension.hasBackgroundContent {
-            extensionContext.loadBackgroundContent { error in
-                if let error {
-                    Self.logger.error("Failed to wake background worker for '\(extName, privacy: .public)': \(error.localizedDescription, privacy: .public)")
-                } else {
+            Task { @MainActor in
+                do {
+                    try await extensionContext.loadBackgroundContent()
                     Self.logger.debug("Background worker alive for '\(extName, privacy: .public)'")
+                } catch {
+                    Self.logger.error("Failed to wake background worker for '\(extName, privacy: .public)': \(error.localizedDescription, privacy: .public)")
                 }
             }
         }
 
         guard let popover = action.popupPopover else {
-            Self.logger.error("No popover available on action")
+            Self.logger.error("No popover available on action for '\(extName, privacy: .public)'")
             completionHandler(
                 NSError(
                     domain: "ExtensionManager",
@@ -74,6 +75,22 @@ extension ExtensionManager {
 
         if let webView = action.popupWebView {
             webView.isInspectable = true
+            // Only set uiDelegate — do NOT override navigationDelegate as Apple's
+            // WKWebExtension framework uses its own internal delegate to load
+            // webkit-extension:// URLs. Overriding it breaks popup loading.
+            let delegate = PopupUIDelegate(webView: webView)
+            self.popupUIDelegate = delegate
+            webView.uiDelegate = delegate
+
+            Self.logger.debug("Popup webView: URL=\(webView.url?.absoluteString ?? "nil", privacy: .public), isLoading=\(webView.isLoading)")
+
+            // The popup webview is created by WKWebExtension with a URL set but not
+            // always loading. Explicitly trigger the load to ensure the popup renders.
+            if !webView.isLoading, let popupURL = webView.url {
+                webView.load(URLRequest(url: popupURL))
+            }
+        } else {
+            Self.logger.warning("No popupWebView on action for '\(extName, privacy: .public)'")
         }
 
         // Present the popover on main thread
