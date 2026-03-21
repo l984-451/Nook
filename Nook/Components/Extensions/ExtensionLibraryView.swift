@@ -60,8 +60,10 @@ struct ExtensionLibraryView: View {
             }
             .disabled(currentTab == nil)
 
-            UtilityButton(icon: "camera.viewfinder", label: "Screenshot") {
-                // Screenshot functionality — can be wired to existing screenshot logic
+            UtilityButton(icon: "doc.on.doc", label: "Copy Title") {
+                guard let title = currentTab?.name else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(title, forType: .string)
             }
             .disabled(currentTab == nil)
 
