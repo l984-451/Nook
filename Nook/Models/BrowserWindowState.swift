@@ -52,6 +52,12 @@ class BrowserWindowState {
     /// Whether the command palette is visible in this window
     var isCommandPaletteVisible: Bool = false
 
+    /// Whether the extension library panel is visible in this window
+    var isExtensionLibraryVisible: Bool = false
+
+    // MARK: - Extension Library
+    // extensionLibraryPanelController will be added here when ExtensionLibraryPanelController type exists
+
     /// Frame of the URL bar within this window
     var urlBarFrame: CGRect = .zero
 

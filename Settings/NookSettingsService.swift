@@ -18,6 +18,9 @@ class NookSettingsService {
     private let searchEngineKey = "settings.searchEngine"
     private let tabUnloadTimeoutKey = "settings.tabUnloadTimeout"
     private let blockXSTKey = "settings.blockCrossSiteTracking"
+    private let adBlockerEnabledKey = "settings.adBlockerEnabled"
+    private let adBlockerWhitelistKey = "settings.adBlockerWhitelist"
+    private let adBlockerLastUpdateKey = "settings.adBlockerLastUpdate"
     private let debugToggleUpdateNotificationKey = "settings.debugToggleUpdateNotification"
     private let askBeforeQuitKey = "settings.askBeforeQuit"
     private let sidebarPositionKey = "settings.sidebarPosition"
@@ -41,6 +44,8 @@ class NookSettingsService {
     private let didFinishOnboardingKey = "settings.didFinishOnboarding"
     private let tabLayoutKey = "settings.tabLayout"
     private let customSearchEnginesKey = "settings.customSearchEngines"
+    private let appearanceModeKey = "settings.appearanceMode"
+    private let pinnedExtensionIDsKey = "settings.pinnedExtensionIDs"
 
     var currentSettingsTab: SettingsTabs = .general
 
@@ -98,6 +103,35 @@ class NookSettingsService {
             NotificationCenter.default.post(name: .blockCrossSiteTrackingChanged, object: nil, userInfo: ["enabled": blockCrossSiteTracking])
         }
     }
+
+    var adBlockerEnabled: Bool {
+        didSet {
+            userDefaults.set(adBlockerEnabled, forKey: adBlockerEnabledKey)
+            NotificationCenter.default.post(name: .adBlockerEnabledChanged, object: nil, userInfo: ["enabled": adBlockerEnabled])
+        }
+    }
+
+    var adBlockerWhitelist: [String] {
+        didSet {
+            if let data = try? JSONEncoder().encode(adBlockerWhitelist) {
+                userDefaults.set(data, forKey: adBlockerWhitelistKey)
+            }
+        }
+    }
+
+    var pinnedExtensionIDs: [String] = [] {
+        didSet {
+            if let data = try? JSONEncoder().encode(pinnedExtensionIDs) {
+                userDefaults.set(data, forKey: pinnedExtensionIDsKey)
+            }
+        }
+    }
+
+    var adBlockerLastUpdate: Date? {
+        didSet {
+            userDefaults.set(adBlockerLastUpdate, forKey: adBlockerLastUpdateKey)
+        }
+    }
     
     var askBeforeQuit: Bool {
         didSet {
@@ -117,6 +151,13 @@ class NookSettingsService {
         }
     }
 
+    var appearanceMode: AppearanceMode {
+        didSet {
+            userDefaults.set(appearanceMode.rawValue, forKey: appearanceModeKey)
+            NotificationCenter.default.post(name: .appearanceModeChanged, object: nil)
+        }
+    }
+
     var debugToggleUpdateNotification: Bool {
         didSet {
             userDefaults.set(debugToggleUpdateNotification, forKey: debugToggleUpdateNotificationKey)
@@ -124,11 +165,7 @@ class NookSettingsService {
     }
 
 
-    var geminiApiKey: String {
-        didSet {
-            userDefaults.set(geminiApiKey, forKey: geminiApiKeyKey)
-        }
-    }
+    var geminiApiKey: String
 
     var geminiModel: GeminiModel {
         didSet {
@@ -148,11 +185,7 @@ class NookSettingsService {
         }
     }
 
-    var openRouterApiKey: String {
-        didSet {
-            userDefaults.set(openRouterApiKey, forKey: openRouterApiKeyKey)
-        }
-    }
+    var openRouterApiKey: String
 
     var openRouterModel: OpenRouterModel {
         didSet {
@@ -240,16 +273,15 @@ class NookSettingsService {
             // Default tab unload timeout: 60 minutes
             tabUnloadTimeoutKey: 3600.0,
             blockXSTKey: false,
+            adBlockerEnabledKey: false,
             debugToggleUpdateNotificationKey: false,
             askBeforeQuitKey: true,
             sidebarPositionKey: SidebarPosition.left.rawValue,
             topBarAddressViewKey: false,
 
-            geminiApiKeyKey: "",
             geminiModelKey: GeminiModel.flash.rawValue,
             showAIAssistantKey: true,
             aiProviderKey: AIProvider.gemini.rawValue,
-            openRouterApiKeyKey: "",
             openRouterModelKey: OpenRouterModel.gpt4o.rawValue,
             ollamaEndpointKey: "http://localhost:11434",
             ollamaModelKey: "llama3",
@@ -261,6 +293,7 @@ class NookSettingsService {
             pinnedTabsLookKey: "large",
             didFinishOnboardingKey: false,
             tabLayoutKey: TabLayout.sidebar.rawValue,
+            appearanceModeKey: AppearanceMode.system.rawValue,
         ])
 
         // Initialize properties from UserDefaults
@@ -280,15 +313,29 @@ class NookSettingsService {
         // Initialize tab unload timeout
         self.tabUnloadTimeout = userDefaults.double(forKey: tabUnloadTimeoutKey)
         self.blockCrossSiteTracking = userDefaults.bool(forKey: blockXSTKey)
+        self.adBlockerEnabled = userDefaults.bool(forKey: adBlockerEnabledKey)
+        if let wlData = userDefaults.data(forKey: adBlockerWhitelistKey),
+           let decoded = try? JSONDecoder().decode([String].self, from: wlData) {
+            self.adBlockerWhitelist = decoded
+        } else {
+            self.adBlockerWhitelist = []
+        }
+        if let pinnedData = userDefaults.data(forKey: pinnedExtensionIDsKey),
+           let pinnedIDs = try? JSONDecoder().decode([String].self, from: pinnedData) {
+            self.pinnedExtensionIDs = pinnedIDs
+        } else {
+            self.pinnedExtensionIDs = []
+        }
+        self.adBlockerLastUpdate = userDefaults.object(forKey: adBlockerLastUpdateKey) as? Date
         self.debugToggleUpdateNotification = userDefaults.bool(forKey: debugToggleUpdateNotificationKey)
         self.askBeforeQuit = userDefaults.bool(forKey: askBeforeQuitKey)
         self.sidebarPosition = SidebarPosition(rawValue: userDefaults.string(forKey: sidebarPositionKey) ?? "left") ?? SidebarPosition.left
         self.topBarAddressView = userDefaults.bool(forKey: topBarAddressViewKey)
-        self.geminiApiKey = userDefaults.string(forKey: geminiApiKeyKey) ?? ""
+        self.geminiApiKey = ""  // In-memory only; persistent storage via AIKeychainStorage
         self.geminiModel = GeminiModel(rawValue: userDefaults.string(forKey: geminiModelKey) ?? GeminiModel.flash.rawValue) ?? .flash
         self.showAIAssistant = userDefaults.bool(forKey: showAIAssistantKey)
         self.aiProvider = AIProvider(rawValue: userDefaults.string(forKey: aiProviderKey) ?? AIProvider.gemini.rawValue) ?? .gemini
-        self.openRouterApiKey = userDefaults.string(forKey: openRouterApiKeyKey) ?? ""
+        self.openRouterApiKey = ""  // In-memory only; persistent storage via AIKeychainStorage
         self.openRouterModel = OpenRouterModel(rawValue: userDefaults.string(forKey: openRouterModelKey) ?? OpenRouterModel.gpt4o.rawValue) ?? .gpt4o
         self.ollamaEndpoint = userDefaults.string(forKey: ollamaEndpointKey) ?? "http://localhost:11434"
         self.ollamaModel = userDefaults.string(forKey: ollamaModelKey) ?? "llama3"
@@ -299,6 +346,7 @@ class NookSettingsService {
         self.showLinkStatusBar = userDefaults.bool(forKey: showLinkStatusBarKey)
         self.pinnedTabsLook = PinnedTabsConfiguration(rawValue: userDefaults.string(forKey: pinnedTabsLookKey) ?? "large") ?? .large
         self.tabLayout = TabLayout(rawValue: userDefaults.string(forKey: tabLayoutKey) ?? TabLayout.sidebar.rawValue) ?? .sidebar
+        self.appearanceMode = AppearanceMode(rawValue: userDefaults.string(forKey: appearanceModeKey) ?? AppearanceMode.system.rawValue) ?? .system
         self.didFinishOnboarding = userDefaults.bool(forKey: didFinishOnboardingKey)
 
         if let data = userDefaults.data(forKey: siteSearchEntriesKey),
@@ -307,6 +355,15 @@ class NookSettingsService {
         } else {
             self.siteSearchEntries = SiteSearchEntry.defaultSites
         }
+
+        // Remove any leftover plaintext API keys from before Keychain migration
+        cleanupPlaintextApiKeys()
+    }
+
+    /// Remove plaintext API keys that may exist from before Keychain migration
+    func cleanupPlaintextApiKeys() {
+        userDefaults.removeObject(forKey: geminiApiKeyKey)
+        userDefaults.removeObject(forKey: openRouterApiKeyKey)
     }
 }
 
@@ -399,6 +456,9 @@ public enum OpenRouterModel: String, CaseIterable, Identifiable {
 extension Notification.Name {
     static let tabUnloadTimeoutChanged = Notification.Name("tabUnloadTimeoutChanged")
     static let blockCrossSiteTrackingChanged = Notification.Name("blockCrossSiteTrackingChanged")
+    static let appearanceModeChanged = Notification.Name("appearanceModeChanged")
+    static let adBlockerEnabledChanged = Notification.Name("adBlockerEnabledChanged")
+    static let adBlockerStateChanged = Notification.Name("adBlockerStateChanged")
 }
 
 // MARK: - Environment Key
@@ -444,6 +504,30 @@ public func nameForMaterial(_ material: NSVisualEffectView.Material) -> String {
 }
 
 // MARK: - Tab Layout
+
+public enum AppearanceMode: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    public var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
 
 public enum TabLayout: String, CaseIterable, Identifiable {
     case sidebar
