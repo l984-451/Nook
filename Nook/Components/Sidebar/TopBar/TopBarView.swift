@@ -220,6 +220,12 @@ struct TopBarView: View {
 
                     ExtensionLibraryButton()
                         .environmentObject(browserManager)
+                        .onAppear {
+                            let installedIDs = extensionManager.installedExtensions
+                                .filter { $0.isEnabled }
+                                .map { $0.id }
+                            browserManager.nookSettings?.migrateExtensionPinStateIfNeeded(installedExtensionIDs: installedIDs)
+                        }
                 }
             } else {
                 EmptyView()

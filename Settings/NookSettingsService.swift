@@ -360,6 +360,19 @@ class NookSettingsService {
         cleanupPlaintextApiKeys()
     }
 
+    /// Call once after ExtensionManager is ready on first launch to pin all existing extensions.
+    func migrateExtensionPinStateIfNeeded(installedExtensionIDs: [String]) {
+        let migrationKey = "settings.pinnedExtensionIDsMigrated"
+        guard !userDefaults.bool(forKey: migrationKey) else { return }
+        userDefaults.set(true, forKey: migrationKey)
+
+        // Pin all currently installed extensions so existing users
+        // see the same URL bar they had before the library button was added
+        if pinnedExtensionIDs.isEmpty {
+            pinnedExtensionIDs = installedExtensionIDs
+        }
+    }
+
     /// Remove plaintext API keys that may exist from before Keychain migration
     func cleanupPlaintextApiKeys() {
         userDefaults.removeObject(forKey: geminiApiKeyKey)

@@ -15,7 +15,7 @@ struct ExtensionLibraryView: View {
     let settings: NookSettingsService
     let onDismiss: () -> Void
 
-    @State private var showMoreMenu = false
+    @State private var moreMenuController = ExtensionLibraryMoreMenuController()
 
     private let logger = Logger(subsystem: "com.nook.browser", category: "ExtensionLibrary")
 
@@ -216,7 +216,15 @@ struct ExtensionLibraryView: View {
             Spacer()
 
             Button {
-                showMoreMenu = true
+                // Get the panel's screen frame for positioning
+                if let panelWindow = NSApp.windows.first(where: { $0 is NSPanel && $0.isVisible && $0.frame.width == 340 }) {
+                    moreMenuController.show(
+                        anchorFrame: panelWindow.frame,
+                        browserManager: browserManager,
+                        windowState: windowState,
+                        onDismiss: {}
+                    )
+                }
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 13, weight: .medium))
