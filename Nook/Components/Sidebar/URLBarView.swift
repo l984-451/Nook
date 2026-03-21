@@ -65,10 +65,18 @@ struct URLBarView: View {
                         .help(currentTab.hasPiPActive ? "Exit Picture in Picture" : "Enter Picture in Picture")
                     }
                     
-                    // Extension action buttons
+                    // Pinned extension buttons + library button
                     if #available(macOS 15.5, *),
                        let extensionManager = browserManager.extensionManager {
-                        ExtensionActionView(extensions: extensionManager.installedExtensions)
+                        let pinnedIDs = browserManager.nookSettings?.pinnedExtensionIDs ?? []
+                        let pinnedExtensions = extensionManager.installedExtensions.filter { pinnedIDs.contains($0.id) }
+
+                        if !pinnedExtensions.isEmpty {
+                            ExtensionActionView(extensions: pinnedExtensions)
+                                .environmentObject(browserManager)
+                        }
+
+                        ExtensionLibraryButton()
                             .environmentObject(browserManager)
                     }
                 }
@@ -79,6 +87,10 @@ struct URLBarView: View {
         .background(
            backgroundColor
         )
+        .overlay(alignment: .bottom) {
+            PageLoadingProgressBar(tab: browserManager.currentTab(for: windowState))
+                .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: 12, bottomTrailingRadius: 12))
+        }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         // Report the frame in the window space so we can overlay the mini palette above all content
         .background(
