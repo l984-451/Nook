@@ -1,0 +1,432 @@
+//
+//  ExtensionLibraryView.swift
+//  Nook
+//
+
+import SwiftUI
+import AppKit
+import WebKit
+import os
+
+@available(macOS 15.5, *)
+struct ExtensionLibraryView: View {
+    let browserManager: BrowserManager
+    let windowState: BrowserWindowState
+    let settings: NookSettingsService
+    let onDismiss: () -> Void
+
+    @State private var showMoreMenu = false
+
+    private let logger = Logger(subsystem: "com.nook.browser", category: "ExtensionLibrary")
+
+    private var currentTab: Tab? {
+        browserManager.currentTab(for: windowState)
+    }
+
+    private var currentHost: String? {
+        currentTab?.url.host
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // MARK: - Utility Buttons
+            utilityButtonsSection
+
+            Divider().opacity(0.15)
+
+            // MARK: - Extensions Grid
+            extensionsSection
+
+            Divider().opacity(0.15)
+
+            // MARK: - Site Settings
+            siteSettingsSection
+
+            // MARK: - Footer
+            footerSection
+        }
+        .frame(width: 340)
+    }
+
+    // MARK: - Utility Buttons
+
+    private var utilityButtonsSection: some View {
+        HStack(spacing: 6) {
+            UtilityButton(icon: "link", label: "Copy Link") {
+                guard let url = currentTab?.url.absoluteString else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url, forType: .string)
+            }
+            .disabled(currentTab == nil)
+
+            UtilityButton(icon: "camera.viewfinder", label: "Screenshot") {
+                // Screenshot functionality — can be wired to existing screenshot logic
+            }
+            .disabled(currentTab == nil)
+
+            UtilityButton(
+                icon: currentTab?.isAudioMuted == true ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                label: currentTab?.isAudioMuted == true ? "Unmute" : "Mute"
+            ) {
+                currentTab?.toggleMute()
+            }
+            .disabled(currentTab == nil)
+
+            UtilityButton(icon: "slider.horizontal.3", label: "Boosts") {
+                guard let tab = currentTab, let webView = tab.webView, let host = tab.url.host else { return }
+                BoostsWindowManager.shared.show(for: webView, domain: host, boostsManager: browserManager.boostsManager)
+            }
+            .disabled(currentTab == nil)
+        }
+        .padding(12)
+    }
+
+    // MARK: - Extensions Grid
+
+    private var extensionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("EXTENSIONS")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary.opacity(0.6))
+                .tracking(0.4)
+                .padding(.horizontal, 4)
+
+            let extensions = browserManager.extensionManager?.installedExtensions.filter { $0.isEnabled } ?? []
+
+            ScrollView {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+                ForEach(extensions, id: \.id) { ext in
+                    ExtensionGridItem(
+                        ext: ext,
+                        isPinned: settings.pinnedExtensionIDs.contains(ext.id),
+                        browserManager: browserManager,
+                        windowState: windowState,
+                        settings: settings
+                    )
+                }
+
+                // Add New button
+                Button {
+                    ExtensionManager.shared.showExtensionInstallDialog()
+                } label: {
+                    VStack(spacing: 5) {
+                        RoundedRectangle(cornerRadius: 9)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                            .foregroundStyle(.secondary.opacity(0.2))
+                            .frame(width: 34, height: 34)
+                            .overlay {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(.secondary.opacity(0.3))
+                            }
+                        Text("Add New")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary.opacity(0.3))
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            }
+            .frame(maxHeight: 300)
+        }
+        .padding(12)
+    }
+
+    // MARK: - Site Settings
+
+    private var siteSettingsSection: some View {
+        VStack(spacing: 2) {
+            // Content Blocker Toggle
+            if let host = currentHost {
+                let isAllowed = browserManager.contentBlockerManager.isDomainAllowed(host)
+
+                SiteSettingRow(
+                    icon: "shield.checkered",
+                    iconColor: .green,
+                    title: "Content Blocker",
+                    subtitle: isAllowed ? "Disabled for this site" : "Enabled"
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { !browserManager.contentBlockerManager.isDomainAllowed(host) },
+                        set: { enabled in
+                            browserManager.contentBlockerManager.allowDomain(host, allowed: !enabled)
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                }
+            }
+
+            // Page Zoom
+            if currentTab != nil {
+                SiteSettingRow(
+                    icon: "magnifyingglass",
+                    iconColor: .blue,
+                    title: "Page Zoom",
+                    subtitle: nil
+                ) {
+                    HStack(spacing: 6) {
+                        Button {
+                            zoomOut()
+                        } label: {
+                            Image(systemName: "minus")
+                                .font(.system(size: 11, weight: .semibold))
+                                .frame(width: 22, height: 22)
+                                .background(.secondary.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                        }
+                        .buttonStyle(.plain)
+
+                        Text("\(browserManager.zoomManager.currentZoomPercentage)%")
+                            .font(.system(size: 12, weight: .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: 36)
+
+                        Button {
+                            zoomIn()
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 11, weight: .semibold))
+                                .frame(width: 22, height: 22)
+                                .background(.secondary.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(12)
+    }
+
+    // MARK: - Footer
+
+    private var footerSection: some View {
+        HStack {
+            HStack(spacing: 5) {
+                Image(systemName: currentTab?.url.scheme == "https" ? "lock.fill" : "lock.open.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary.opacity(0.5))
+                Text(currentHost ?? "No site loaded")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary.opacity(0.5))
+            }
+
+            Spacer()
+
+            Button {
+                showMoreMenu = true
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary.opacity(0.5))
+                    .frame(width: 26, height: 26)
+                    .background(.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.black.opacity(0.08))
+    }
+
+    // MARK: - Zoom Helpers
+
+    private func zoomIn() {
+        guard let tab = currentTab, let webView = tab.webView else { return }
+        browserManager.zoomManager.zoomIn(for: webView, domain: tab.url.host, tabId: tab.id)
+    }
+
+    private func zoomOut() {
+        guard let tab = currentTab, let webView = tab.webView else { return }
+        browserManager.zoomManager.zoomOut(for: webView, domain: tab.url.host, tabId: tab.id)
+    }
+}
+
+// MARK: - Utility Button
+
+private struct UtilityButton: View {
+    let icon: String
+    let label: String
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 15))
+                    .frame(width: 28, height: 28)
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(isHovering ? Color.secondary.opacity(0.12) : Color.secondary.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+    }
+}
+
+// MARK: - Extension Grid Item
+
+@available(macOS 15.5, *)
+private struct ExtensionGridItem: View {
+    let ext: InstalledExtension
+    let isPinned: Bool
+    let browserManager: BrowserManager
+    let windowState: BrowserWindowState
+    let settings: NookSettingsService
+
+    @State private var isHovering = false
+    @State private var badgeText: String?
+
+    private var currentTab: Tab? {
+        browserManager.currentTab(for: windowState)
+    }
+
+    var body: some View {
+        Button {
+            triggerExtensionAction()
+        } label: {
+            VStack(spacing: 5) {
+                ZStack(alignment: .topTrailing) {
+                    Group {
+                        if let iconPath = ext.iconPath,
+                           let nsImage = NSImage(contentsOfFile: iconPath) {
+                            Image(nsImage: nsImage)
+                                .resizable()
+                                .interpolation(.high)
+                                .antialiased(true)
+                                .scaledToFit()
+                        } else {
+                            Image(systemName: "puzzlepiece.extension")
+                                .font(.system(size: 16))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(width: 34, height: 34)
+                    .background(.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+
+                    if let badge = badgeText, !badge.isEmpty {
+                        Text(badge)
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.red)
+                            .clipShape(Capsule())
+                            .offset(x: 4, y: -4)
+                    }
+
+                    if isPinned {
+                        Circle()
+                            .fill(Color.blue.opacity(0.8))
+                            .frame(width: 5, height: 5)
+                            .offset(x: -2, y: 2)
+                    }
+                }
+
+                Text(ext.name)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary.opacity(0.7))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 72)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+            .frame(maxWidth: .infinity)
+            .background(isHovering ? Color.secondary.opacity(0.08) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .onAppear { refreshBadge() }
+        .contextMenu {
+            if isPinned {
+                Button("Unpin from URL Bar") {
+                    settings.pinnedExtensionIDs.removeAll { $0 == ext.id }
+                }
+            } else {
+                Button("Pin to URL Bar") {
+                    settings.pinnedExtensionIDs.append(ext.id)
+                }
+            }
+        }
+        .accessibilityLabel(ext.name)
+        .accessibilityHint("Extension. Double-tap to activate.")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private func triggerExtensionAction() {
+        guard let ctx = ExtensionManager.shared.getExtensionContext(for: ext.id) else { return }
+
+        if ctx.webExtension.hasBackgroundContent {
+            ctx.loadBackgroundContent { error in
+                if let error { Logger(subsystem: "com.nook.browser", category: "ExtensionLibrary").error("Background wake failed: \(error.localizedDescription, privacy: .public)") }
+            }
+        }
+
+        let adapter: ExtensionTabAdapter? = currentTab.flatMap { ExtensionManager.shared.stableAdapter(for: $0) }
+        ctx.performAction(for: adapter)
+    }
+
+    private func refreshBadge() {
+        guard let ctx = ExtensionManager.shared.getExtensionContext(for: ext.id) else {
+            badgeText = nil
+            return
+        }
+        let adapter: ExtensionTabAdapter? = currentTab.flatMap { ExtensionManager.shared.stableAdapter(for: $0) }
+        badgeText = ctx.action(for: adapter)?.badgeText
+    }
+}
+
+// MARK: - Site Setting Row
+
+private struct SiteSettingRow<Control: View>: View {
+    let icon: String
+    let iconColor: Color
+    let title: String
+    let subtitle: String?
+    @ViewBuilder let control: () -> Control
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13))
+                .foregroundStyle(iconColor)
+                .frame(width: 28, height: 28)
+                .background(iconColor.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary.opacity(0.6))
+                }
+            }
+
+            Spacer()
+
+            control()
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 7)
+        .background(isHovering ? Color.secondary.opacity(0.06) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onHover { isHovering = $0 }
+    }
+}

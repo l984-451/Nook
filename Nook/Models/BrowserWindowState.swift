@@ -56,7 +56,12 @@ class BrowserWindowState {
     var isExtensionLibraryVisible: Bool = false
 
     // MARK: - Extension Library
-    // extensionLibraryPanelController will be added here when ExtensionLibraryPanelController type exists
+    private var _extensionLibraryPanelController: Any?
+    @available(macOS 15.5, *)
+    var extensionLibraryPanelController: ExtensionLibraryPanelController? {
+        get { _extensionLibraryPanelController as? ExtensionLibraryPanelController }
+        set { _extensionLibraryPanelController = newValue }
+    }
 
     /// Frame of the URL bar within this window
     var urlBarFrame: CGRect = .zero
