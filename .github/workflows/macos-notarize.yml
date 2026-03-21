@@ -1,8 +1,8 @@
 name: macOS Build, Sign, Notarize & Release
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [release]
   workflow_dispatch:
 
 jobs:
@@ -19,10 +19,11 @@ jobs:
 
       - name: Set version info
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
-          SHORT_VERSION="${VERSION#v}"
+          SHORT_VERSION=$(grep 'MARKETING_VERSION' Nook.xcodeproj/project.pbxproj \
+            | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
           BUILD_NUMBER=$(grep 'CURRENT_PROJECT_VERSION' Nook.xcodeproj/project.pbxproj \
             | head -n1 | grep -oE '[0-9]+' | tail -n1)
+          VERSION="v${SHORT_VERSION}"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "SHORT_VERSION=$SHORT_VERSION" >> $GITHUB_ENV
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_ENV
@@ -164,13 +165,17 @@ jobs:
             -srcfolder "Nook.app" \
             -ov -format UDZO "Nook-${VERSION}.dmg"
 
-      - name: Upload DMG to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: Nook-*.dmg
-          fail_on_unmatched_files: false
+      - name: Create GitHub Release and upload DMG
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Create the release (or update if tag already exists)
+          gh release create "$VERSION" \
+            --title "Nook $SHORT_VERSION" \
+            --generate-notes \
+            --target release \
+            "Nook-${VERSION}.dmg" \
+          || gh release upload "$VERSION" "Nook-${VERSION}.dmg" --clobber
 
       - name: Update appcast on gh-pages
         run: |

@@ -36,7 +36,7 @@
 	<key>SUEnableDowngrade</key>
 	<false/>
 	<key>SUFeedURL</key>
-	<string>https://nook-browser.github.io/Nook/appcast.xml</string>
+	<string>https://l984-451.github.io/Nook/appcast.xml</string>
 	<key>SUScheduledCheckInterval</key>
 	<integer>86400</integer>
 	<key>SUUpdateRelaunchDelay</key>
