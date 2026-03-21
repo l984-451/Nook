@@ -199,15 +199,24 @@ struct TopBarView: View {
     private var urlBar: some View {
         HStack(spacing: 8) {
             if browserManager.currentTab(for: windowState) != nil {
+                // URL text area — tappable to open command palette
                 Text(displayURL)
                     .font(.system(size: 13, weight: .medium, design: .default))
                     .foregroundStyle(urlBarTextColor)
                     .tracking(-0.1)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Spacer()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if let currentTab = browserManager.currentTab(for: windowState) {
+                            commandPalette.openWithCurrentURL(currentTab.url)
+                        } else {
+                            commandPalette.open()
+                        }
+                    }
 
-                // Pinned extension buttons + library button
+                // Pinned extension buttons + library button (not covered by tap gesture)
                 if #available(macOS 15.5, *),
                    let extensionManager = browserManager.extensionManager {
                     let pinnedIDs = browserManager.nookSettings?.pinnedExtensionIDs ?? []
@@ -239,13 +248,6 @@ struct TopBarView: View {
             value: urlBarBackgroundColor
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .onTapGesture {
-            if let currentTab = browserManager.currentTab(for: windowState) {
-                commandPalette.openWithCurrentURL(currentTab.url)
-            } else {
-                commandPalette.open()
-            }
-        }
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovering = hovering
