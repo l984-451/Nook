@@ -401,7 +401,7 @@ class BrowserManager: ObservableObject {
     var compositorManager: TabCompositorManager
     var splitManager: SplitViewManager
     var gradientColorManager: GradientColorManager
-    var trackingProtectionManager: TrackingProtectionManager
+    var contentBlockerManager: ContentBlockerManager
     var findManager: FindManager
     var importManager: ImportManager
     var zoomManager = ZoomManager()
@@ -454,7 +454,7 @@ class BrowserManager: ObservableObject {
         // Only animate if this is the active window (to avoid animating all windows simultaneously)
         let isActiveWindow = windowRegistry?.activeWindow?.id == windowState.id
         if animate && isActiveWindow {
-            gradientColorManager.transition(to: newGradient, duration: 0.45)
+            gradientColorManager.transition(to: newGradient, duration: 0.25, animation: .easeInOut(duration: 0.25))
         } else {
             gradientColorManager.setImmediate(newGradient)
         }
@@ -472,7 +472,7 @@ class BrowserManager: ObservableObject {
             if windowState.currentSpaceId == space.id {
                 let isActiveWindow = windowState.id == activeWindowId
                 if animate && isActiveWindow {
-                    gradientColorManager.transition(to: space.gradient, duration: 0.45)
+                    gradientColorManager.transition(to: space.gradient, duration: 0.25, animation: .easeInOut(duration: 0.25))
                 } else {
                     gradientColorManager.setImmediate(space.gradient)
                 }
@@ -535,7 +535,7 @@ class BrowserManager: ObservableObject {
         self.compositorManager = TabCompositorManager()
         self.splitManager = SplitViewManager()
         self.gradientColorManager = GradientColorManager()
-        self.trackingProtectionManager = TrackingProtectionManager()
+        self.contentBlockerManager = ContentBlockerManager()
         self.findManager = FindManager()
         self.importManager = ImportManager()
 
@@ -564,7 +564,7 @@ class BrowserManager: ObservableObject {
         } else {
             self.gradientColorManager.setImmediate(.default)
         }
-        self.trackingProtectionManager.attach(browserManager: self)
+        self.contentBlockerManager.attach(browserManager: self)
         // Note: tracking protection will be configured after settingsManager injection
 
         self.externalMiniWindowManager.attach(browserManager: self)
@@ -588,10 +588,21 @@ class BrowserManager: ObservableObject {
         ) { [weak self] note in
             guard let enabled = note.userInfo?["enabled"] as? Bool else { return }
             Task { @MainActor [weak self] in
-                self?.trackingProtectionManager.setEnabled(enabled)
+                self?.contentBlockerManager.setEnabled(enabled)
             }
         }
-        
+
+        NotificationCenter.default.addObserver(
+            forName: .adBlockerEnabledChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let enabled = note.userInfo?["enabled"] as? Bool else { return }
+            Task { @MainActor [weak self] in
+                self?.contentBlockerManager.setEnabled(enabled)
+            }
+        }
+
         // Listen for TabManager initial data load completion to update window states
         NotificationCenter.default.addObserver(
             forName: .tabManagerDidLoadInitialData,
@@ -629,8 +640,10 @@ class BrowserManager: ObservableObject {
         
         for (_, windowState) in windowRegistry.windows {
             // Set current tab and space from TabManager
-            windowState.currentTabId = tabManager.currentTab?.id
-            windowState.currentSpaceId = tabManager.currentSpace?.id
+            let activeSpace = tabManager.currentSpace ?? tabManager.spaces.first
+            let activeTab = tabManager.currentTab ?? activeSpace.flatMap { tabManager.tabs(in: $0).first }
+            windowState.currentTabId = activeTab?.id
+            windowState.currentSpaceId = activeSpace?.id
             
             // Set gradient from current space
             if let spaceId = windowState.currentSpaceId,
@@ -640,12 +653,17 @@ class BrowserManager: ObservableObject {
                 // Only animate for the active window
                 let isActiveWindow = windowRegistry.activeWindow?.id == windowState.id
                 if isActiveWindow {
-                    gradientColorManager.transition(to: space.gradient, duration: 0.3)
+                    gradientColorManager.transition(to: space.gradient, duration: 0.25, animation: .easeInOut(duration: 0.25))
                 } else {
                     gradientColorManager.setImmediate(space.gradient)
                 }
             }
             
+            // Ensure the active tab's webview is loaded before refreshing
+            if let activeTab, activeTab.isUnloaded {
+                activeTab.loadWebViewIfNeeded()
+            }
+
             // Refresh compositor to show the current tab
             windowState.refreshCompositor()
         }
@@ -656,14 +674,14 @@ class BrowserManager: ObservableObject {
     // MARK: - OAuth Assist Controls
     func maybeShowOAuthAssist(for url: URL, in tab: Tab) {
         // Only when protection is enabled and not already disabled for this tab
-        guard nookSettings?.blockCrossSiteTracking == true, trackingProtectionManager.isEnabled else {
+        guard contentBlockerManager.isEnabled else {
             return
         }
-        guard !trackingProtectionManager.isTemporarilyDisabled(tabId: tab.id) else { return }
+        guard !contentBlockerManager.isTemporarilyDisabled(tabId: tab.id) else { return }
         let host = url.host?.lowercased() ?? ""
         guard !host.isEmpty else { return }
         // Respect per-domain allow list
-        guard !trackingProtectionManager.isDomainAllowed(host) else { return }
+        guard !contentBlockerManager.isDomainAllowed(host) else { return }
         // Simple heuristic for OAuth endpoints
         if OAuthDetector.isLikelyOAuthURL(url) {
             let now = Date()
@@ -683,13 +701,13 @@ class BrowserManager: ObservableObject {
     func oauthAssistAllowForThisTab(duration: TimeInterval = 15 * 60) {
         guard let assist = oauthAssist else { return }
         guard let tab = tabManager.allTabs().first(where: { $0.id == assist.tabId }) else { return }
-        trackingProtectionManager.disableTemporarily(for: tab, duration: duration)
+        contentBlockerManager.disableTemporarily(for: tab, duration: duration)
         hideOAuthAssist()
     }
 
     func oauthAssistAlwaysAllowDomain() {
         guard let assist = oauthAssist else { return }
-        trackingProtectionManager.allowDomain(assist.host, allowed: true)
+        contentBlockerManager.allowDomain(assist.host, allowed: true)
         hideOAuthAssist()
     }
 
@@ -697,7 +715,7 @@ class BrowserManager: ObservableObject {
     func oauthAllowDomain(_ host: String) {
         let normalizedHost = host.lowercased()
         print("🔐 [BrowserManager] Auto-allowing OAuth provider domain: \(normalizedHost)")
-        trackingProtectionManager.allowDomain(normalizedHost, allowed: true)
+        contentBlockerManager.allowDomain(normalizedHost, allowed: true)
     }
 
     // MARK: - Profile Switching
@@ -849,6 +867,33 @@ class BrowserManager: ObservableObject {
                 windowState.isSidebarMenuVisible = false
             }
         }
+    }
+
+    // MARK: - Extension Library Panel
+
+    /// Toggles the extension library panel for the active window via keyboard shortcut.
+    @available(macOS 15.5, *)
+    func toggleExtensionLibrary() {
+        guard let windowState = windowRegistry?.activeWindow,
+              let window = windowState.window,
+              let settings = nookSettings else { return }
+
+        // Lazily create the panel controller if needed
+        if windowState.extensionLibraryPanelController == nil {
+            windowState.extensionLibraryPanelController = ExtensionLibraryPanelController()
+        }
+        guard let panelController = windowState.extensionLibraryPanelController else { return }
+
+        let willShow = !panelController.isVisible
+        windowState.isExtensionLibraryVisible = willShow
+
+        panelController.toggle(
+            anchorFrame: windowState.urlBarFrame,
+            in: window,
+            browserManager: self,
+            windowState: windowState,
+            settings: settings
+        )
     }
 
     // MARK: - Sidebar width access for overlays
@@ -1014,6 +1059,7 @@ class BrowserManager: ObservableObject {
         if self.nookSettings?.askBeforeQuit == true {
             dialogManager.showQuitDialog(
                 onAlwaysQuit: {
+                    self.nookSettings?.askBeforeQuit = false
                     self.quitApplication()
                 },
                 onQuit: {

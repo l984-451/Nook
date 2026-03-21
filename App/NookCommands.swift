@@ -323,6 +323,13 @@ struct NookCommands: Commands {
 
             if #available(macOS 15.5, *) {
                 CommandMenu("Extensions") {
+                    Button("Toggle Extension Library") {
+                        browserManager.toggleExtensionLibrary()
+                    }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                    Divider()
+
                     Button("Install Extension...") {
                         browserManager.showExtensionInstallDialog()
                     }
