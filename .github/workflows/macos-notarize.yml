@@ -59,7 +59,9 @@ jobs:
         run: |
           set -e
           mkdir -p build
-          ENTITLEMENTS="$(pwd)/Nook/Nook.entitlements"
+          # CI entitlements omit push/autofill which require provisioning profiles.
+          # The re-sign step applies the full entitlements before notarization.
+          ENTITLEMENTS="$(pwd)/Nook/Nook-CI.entitlements"
           echo "Attempting universal build (arm64 + x86_64)..."
           if ! xcodebuild -scheme Nook -configuration Release \
             -arch arm64 -arch x86_64 \
