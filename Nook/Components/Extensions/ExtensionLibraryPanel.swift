@@ -173,12 +173,21 @@ final class ExtensionLibraryPanelController {
                 return event
             }
 
-            // Check if click is inside the panel
+            // Check if click is inside the main panel
             if let eventWindow = event.window, eventWindow == panel {
-                return event // Click inside panel, allow it
+                return event
             }
 
-            // Click outside panel — dismiss
+            // Also allow clicks inside any other floating non-activating NSPanel
+            // (e.g. the more menu). These are our child panels.
+            if let eventWindow = event.window,
+               eventWindow is NSPanel,
+               eventWindow.level == .floating,
+               eventWindow.styleMask.contains(.nonactivatingPanel) {
+                return event
+            }
+
+            // Click outside all our panels — dismiss
             self.dismiss()
             return event
         }
