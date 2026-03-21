@@ -68,7 +68,9 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_ENTITLEMENTS="$ENTITLEMENTS" \
-            PROVISIONING_PROFILE_SPECIFIER=""; then
+            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            COMPILER_INDEX_STORE_ENABLE=NO; then
             echo "Universal build failed, retrying Apple Silicon only..."
             xcodebuild -scheme Nook -configuration Release \
               -arch arm64 \
@@ -77,7 +79,9 @@ jobs:
               CODE_SIGN_STYLE=Manual \
               DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
               CODE_SIGN_ENTITLEMENTS="$ENTITLEMENTS" \
-              PROVISIONING_PROFILE_SPECIFIER=""
+              CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+              PROVISIONING_PROFILE_SPECIFIER="" \
+              COMPILER_INDEX_STORE_ENABLE=NO
           fi
           cp -R "build/Build/Products/Release/Nook.app" ./Nook.app
 
