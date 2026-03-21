@@ -5,38 +5,32 @@
 
 import SwiftUI
 import AppKit
+import os
 
 @available(macOS 15.5, *)
 struct ExtensionLibraryButton: View {
     @EnvironmentObject var browserManager: BrowserManager
     @Environment(BrowserWindowState.self) private var windowState
 
-    @State private var isHovering = false
+    private static let logger = Logger(subsystem: "com.nook.browser", category: "ExtensionLibraryButton")
+
+    @State private var capturedWindow: NSWindow?
+    @State private var anchorView: NSView?
 
     var body: some View {
-        Button {
+        Button("Extensions", systemImage: "square.grid.2x2") {
             togglePanel()
-        } label: {
-            Image(systemName: "square.grid.2x2")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.primary.opacity(0.6))
-                .frame(width: 28, height: 28)
-                .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(.primary.opacity(isHovering ? 0.08 : 0))
-                )
         }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .accessibilityLabel("Extension Library")
-        .accessibilityHint("Opens site utilities and extensions panel")
+        .labelStyle(.iconOnly)
+        .buttonStyle(URLBarButtonStyle())
+        .foregroundStyle(Color.primary)
+        .background(ButtonAnchorCapture(window: $capturedWindow, anchorView: $anchorView))
         .onChange(of: windowState.isExtensionLibraryVisible) { _, visible in
             if !visible && panelController.isVisible {
                 panelController.dismiss()
             }
         }
         .onChange(of: browserManager.currentTab(for: windowState)?.id) { _, _ in
-            // Dismiss panel on tab switch
             if panelController.isVisible {
                 panelController.dismiss()
                 windowState.isExtensionLibraryVisible = false
@@ -52,13 +46,31 @@ struct ExtensionLibraryButton: View {
     }
 
     private func togglePanel() {
-        guard let window = windowState.window, let settings = browserManager.nookSettings else { return }
+        guard let window = capturedWindow ?? windowState.window,
+              let settings = browserManager.nookSettings else {
+            Self.logger.error("Early return — no window or settings")
+            return
+        }
 
         windowState.isExtensionLibraryVisible.toggle()
 
         if windowState.isExtensionLibraryVisible {
+            // Get anchor frame from the button's parent view in window coordinates
+            // The anchorView itself is zero-sized; its superview is the button's frame
+            let anchor: CGRect
+            if let view = anchorView, let superview = view.superview {
+                let buttonFrame = superview.convert(superview.bounds, to: nil) // nil = window coordinates
+                anchor = buttonFrame
+            } else {
+                // Last resort fallback
+                let contentFrame = window.contentView?.bounds ?? window.frame
+                anchor = CGRect(x: contentFrame.maxX - 50, y: contentFrame.maxY, width: 50, height: 40)
+            }
+
+            Self.logger.info("Opening panel — anchor=\(anchor.debugDescription, privacy: .public)")
+
             panelController.show(
-                anchorFrame: windowState.urlBarFrame,
+                anchorFrame: anchor,
                 in: window,
                 browserManager: browserManager,
                 windowState: windowState,
@@ -66,6 +78,27 @@ struct ExtensionLibraryButton: View {
             )
         } else {
             panelController.dismiss()
+        }
+    }
+}
+
+// MARK: - Button Anchor Capture
+
+/// Captures the NSWindow and NSView from the SwiftUI view hierarchy for positioning.
+private struct ButtonAnchorCapture: NSViewRepresentable {
+    @Binding var window: NSWindow?
+    @Binding var anchorView: NSView?
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.setFrameSize(.zero)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            self.window = nsView.window
+            self.anchorView = nsView
         }
     }
 }

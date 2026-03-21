@@ -45,7 +45,8 @@ struct ExtensionLibraryView: View {
             // MARK: - Footer
             footerSection
         }
-        .frame(width: 340)
+        .frame(width: 300)
+        .background(.clear)
     }
 
     // MARK: - Utility Buttons
@@ -64,13 +65,7 @@ struct ExtensionLibraryView: View {
             }
             .disabled(currentTab == nil)
 
-            UtilityButton(
-                icon: currentTab?.isAudioMuted == true ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                label: currentTab?.isAudioMuted == true ? "Unmute" : "Mute"
-            ) {
-                currentTab?.toggleMute()
-            }
-            .disabled(currentTab == nil)
+            MuteButton(tab: currentTab)
 
             UtilityButton(icon: "slider.horizontal.3", label: "Boosts") {
                 guard let tab = currentTab, let webView = tab.webView, let host = tab.url.host else { return }
@@ -134,26 +129,27 @@ struct ExtensionLibraryView: View {
 
     // MARK: - Site Settings
 
+    @State private var contentBlockerEnabled: Bool = true
+
     private var siteSettingsSection: some View {
         VStack(spacing: 2) {
             // Content Blocker Toggle
             if let host = currentHost {
-                let isAllowed = browserManager.contentBlockerManager.isDomainAllowed(host)
-
                 SiteSettingRow(
                     icon: "shield.checkered",
                     iconColor: .green,
                     title: "Content Blocker",
-                    subtitle: isAllowed ? "Disabled for this site" : "Enabled"
+                    subtitle: contentBlockerEnabled ? "Enabled" : "Disabled for this site"
                 ) {
-                    Toggle("", isOn: Binding(
-                        get: { !browserManager.contentBlockerManager.isDomainAllowed(host) },
-                        set: { enabled in
+                    Toggle("", isOn: $contentBlockerEnabled)
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .onChange(of: contentBlockerEnabled) { _, enabled in
                             browserManager.contentBlockerManager.allowDomain(host, allowed: !enabled)
                         }
-                    ))
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
+                }
+                .onAppear {
+                    contentBlockerEnabled = !browserManager.contentBlockerManager.isDomainAllowed(host)
                 }
             }
 
@@ -216,8 +212,10 @@ struct ExtensionLibraryView: View {
             Spacer()
 
             Button {
-                // Get the panel's screen frame for positioning
-                if let panelWindow = NSApp.windows.first(where: { $0 is NSPanel && $0.isVisible && $0.frame.width == 340 }) {
+                // Find the library panel by looking for our visible NSPanel
+                if let panelWindow = NSApp.windows.first(where: {
+                    $0 is NSPanel && $0.isVisible && $0.level == .floating && $0.styleMask.contains(.nonactivatingPanel)
+                }) {
                     moreMenuController.show(
                         anchorFrame: panelWindow.frame,
                         browserManager: browserManager,
@@ -250,6 +248,44 @@ struct ExtensionLibraryView: View {
     private func zoomOut() {
         guard let tab = currentTab, let webView = tab.webView else { return }
         browserManager.zoomManager.zoomOut(for: webView, domain: tab.url.host, tabId: tab.id)
+    }
+}
+
+// MARK: - Mute Button (reactive to tab state)
+
+private struct MuteButton: View {
+    let tab: Tab?
+
+    @State private var isMuted = false
+    @State private var isHovering = false
+
+    var body: some View {
+        Button {
+            tab?.toggleMute()
+            // Update local state immediately for snappy UI
+            if tab != nil { isMuted.toggle() }
+        } label: {
+            VStack(spacing: 5) {
+                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 15))
+                    .frame(width: 28, height: 28)
+                    .contentTransition(.symbolEffect(.replace))
+                Text(isMuted ? "Unmute" : "Mute")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(isHovering ? Color.secondary.opacity(0.12) : Color.secondary.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .disabled(tab == nil)
+        .onHover { isHovering = $0 }
+        .onAppear { isMuted = tab?.isAudioMuted ?? false }
+        .onChange(of: tab?.isAudioMuted) { _, newValue in
+            isMuted = newValue ?? false
+        }
     }
 }
 
@@ -334,12 +370,6 @@ private struct ExtensionGridItem: View {
                             .offset(x: 4, y: -4)
                     }
 
-                    if isPinned {
-                        Circle()
-                            .fill(Color.blue.opacity(0.8))
-                            .frame(width: 5, height: 5)
-                            .offset(x: -2, y: 2)
-                    }
                 }
 
                 Text(ext.name)
@@ -354,6 +384,15 @@ private struct ExtensionGridItem: View {
             .frame(maxWidth: .infinity)
             .background(isHovering ? Color.secondary.opacity(0.08) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(alignment: .topTrailing) {
+                if isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.blue.opacity(0.8))
+                        .rotationEffect(.degrees(45))
+                        .padding(4)
+                }
+            }
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }

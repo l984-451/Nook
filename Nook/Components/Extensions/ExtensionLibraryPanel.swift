@@ -5,6 +5,7 @@
 
 import SwiftUI
 import AppKit
+import os
 
 @available(macOS 15.5, *)
 @MainActor
@@ -12,8 +13,10 @@ final class ExtensionLibraryPanelController {
     private var panel: NSPanel?
     private var localMonitor: Any?
     private var hostingView: NSHostingView<AnyView>?
+    private var isShowingInProgress = false
 
-    private let panelWidth: CGFloat = 340
+    private let panelWidth: CGFloat = 300
+    private static let logger = Logger(subsystem: "com.nook.browser", category: "ExtensionLibraryPanel")
 
     var isVisible: Bool {
         panel?.isVisible ?? false
@@ -67,7 +70,11 @@ final class ExtensionLibraryPanelController {
             visualEffect.layer?.masksToBounds = true
             visualEffect.translatesAutoresizingMaskIntoConstraints = false
 
+            // Container with rounded corners and clipping
             let container = NSView()
+            container.wantsLayer = true
+            container.layer?.cornerRadius = 16
+            container.layer?.masksToBounds = true
             container.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(visualEffect)
             container.addSubview(hosting)
@@ -87,47 +94,52 @@ final class ExtensionLibraryPanelController {
             self.hostingView = hosting
         }
 
-        // Size the panel to fit content
+        // Size the panel — use a reasonable default if fittingSize is zero
         hostingView?.invalidateIntrinsicContentSize()
-        let fittingSize = hostingView?.fittingSize ?? CGSize(width: panelWidth, height: 400)
-        let panelSize = CGSize(width: panelWidth, height: min(fittingSize.height, 500))
+        let fittingSize = hostingView?.fittingSize ?? .zero
+        let height = fittingSize.height > 10 ? min(fittingSize.height, 500) : 400
+        let panelSize = CGSize(width: panelWidth, height: height)
 
-        // Position below the anchor, right-aligned
-        let windowAnchor = window.convertPoint(toScreen: CGPoint(
-            x: anchorFrame.maxX,
+        Self.logger.info("show() — anchorFrame=\(anchorFrame.debugDescription, privacy: .public), fittingSize=\(fittingSize.debugDescription, privacy: .public), panelSize=\(panelSize.debugDescription, privacy: .public)")
+
+        // Position below the anchor, centered on the button's midpoint
+        let anchorMidX = anchorFrame.midX
+        let anchorScreenPoint = window.convertPoint(toScreen: CGPoint(
+            x: anchorMidX,
             y: anchorFrame.minY
         ))
-        let origin = CGPoint(
-            x: windowAnchor.x - panelWidth,
-            y: windowAnchor.y - panelSize.height - 4
+        var origin = CGPoint(
+            x: anchorScreenPoint.x - panelWidth / 2,
+            y: anchorScreenPoint.y - panelSize.height - 4
         )
+
+        // Safety: ensure panel is on screen
+        if let screen = window.screen ?? NSScreen.main {
+            let visibleFrame = screen.visibleFrame
+            origin.x = max(visibleFrame.minX, min(origin.x, visibleFrame.maxX - panelWidth))
+            origin.y = max(visibleFrame.minY, min(origin.y, visibleFrame.maxY - panelSize.height))
+        }
+
+        Self.logger.info("show() — origin=\(origin.debugDescription, privacy: .public), window.frame=\(window.frame.debugDescription, privacy: .public)")
 
         panel.setFrame(NSRect(origin: origin, size: panelSize), display: true)
         panel.orderFront(nil)
+        panel.alphaValue = 1
 
-        // Open animation
-        panel.alphaValue = 0
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.15
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().alphaValue = 1
+        // Delay event monitor installation so the current click doesn't immediately dismiss
+        isShowingInProgress = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.isShowingInProgress = false
+            self?.installEventMonitor()
         }
-
-        installEventMonitor()
     }
 
     func dismiss() {
         guard let panel = panel, panel.isVisible else { return }
 
         removeEventMonitor()
-
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.1
-            panel.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            panel.orderOut(nil)
-            self?.panel?.alphaValue = 1
-        })
+        panel.orderOut(nil)
+        panel.alphaValue = 1
     }
 
     // MARK: - Private
