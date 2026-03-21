@@ -53,17 +53,19 @@ struct ExtensionLibraryView: View {
 
     private var utilityButtonsSection: some View {
         HStack(spacing: 6) {
-            UtilityButton(icon: "link", label: "Copy Link") {
-                guard let url = currentTab?.url.absoluteString else { return }
+            CopyButton(icon: "link", label: "Copy Link") {
+                guard let url = currentTab?.url.absoluteString else { return false }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(url, forType: .string)
+                return true
             }
             .disabled(currentTab == nil)
 
-            UtilityButton(icon: "doc.on.doc", label: "Copy Title") {
-                guard let title = currentTab?.name else { return }
+            CopyButton(icon: "doc.on.doc", label: "Copy Title") {
+                guard let title = currentTab?.name else { return false }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(title, forType: .string)
+                return true
             }
             .disabled(currentTab == nil)
 
@@ -288,6 +290,49 @@ private struct MuteButton: View {
         .onChange(of: tab?.isAudioMuted) { _, newValue in
             isMuted = newValue ?? false
         }
+    }
+}
+
+// MARK: - Copy Button (with checkmark feedback)
+
+private struct CopyButton: View {
+    let icon: String
+    let label: String
+    let action: () -> Bool  // returns true if copy succeeded
+
+    @State private var isHovering = false
+    @State private var showCheckmark = false
+
+    var body: some View {
+        Button {
+            if action() {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    showCheckmark = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        showCheckmark = false
+                    }
+                }
+            }
+        } label: {
+            VStack(spacing: 5) {
+                Image(systemName: showCheckmark ? "checkmark" : icon)
+                    .font(.system(size: 15))
+                    .foregroundStyle(showCheckmark ? .green : .primary)
+                    .frame(width: 28, height: 28)
+                    .contentTransition(.symbolEffect(.replace))
+                Text(showCheckmark ? "Copied!" : label)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(showCheckmark ? .green : .secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(isHovering ? Color.secondary.opacity(0.12) : Color.secondary.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
     }
 }
 
