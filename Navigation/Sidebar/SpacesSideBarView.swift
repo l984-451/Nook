@@ -121,7 +121,8 @@ struct SpacesSideBarView: View {
             .environmentObject(browserManager)
             .environment(windowState)
         }
-        .padding(.top, 8)
+        // Extra top padding when sidebar is on the left to avoid overlapping native traffic light buttons
+        .padding(.top, nookSettings.sidebarPosition == .left ? 30 : 8)
         .padding(.bottom, 8)
         .background(
             GeometryReader { geo in

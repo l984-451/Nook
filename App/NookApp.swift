@@ -187,7 +187,7 @@ struct NookApp: App {
 /// Configures the window appearance and behavior for Nook browser windows
 ///
 /// This modifier:
-/// - Hides the standard macOS title bar and window buttons
+/// - Hides the title bar text while keeping native traffic light buttons visible
 /// - Sets transparent background for custom window styling
 /// - Configures minimum window size
 /// - Enables full-size content view for edge-to-edge content
@@ -208,9 +208,6 @@ struct BackgroundWindowModifier: NSViewRepresentable {
                     .fullSizeContentView,
                 ]
 
-                window.standardWindowButton(.closeButton)?.isHidden = true
-                window.standardWindowButton(.zoomButton)?.isHidden = true
-                window.standardWindowButton(.miniaturizeButton)?.isHidden = true
                 window.minSize = NSSize(width: 470, height: 382)
                 window.contentMinSize = NSSize(width: 470, height: 382)
             }
@@ -222,9 +219,6 @@ struct BackgroundWindowModifier: NSViewRepresentable {
         // Re-apply titlebar hiding on every update to prevent flash during view transitions
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.standardWindowButton(.closeButton)?.isHidden = true
-        window.standardWindowButton(.zoomButton)?.isHidden = true
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
     }
 }
 

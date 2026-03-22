@@ -62,12 +62,6 @@ struct SidebarMenu: View {
     
     var tabs: some View{
         VStack {
-            HStack {
-                MacButtonsView()
-                    .frame(width: 70, height: 20)
-                    .padding(8)
-                Spacer()
-            }
             
             Spacer()
             VStack(spacing: 20) {

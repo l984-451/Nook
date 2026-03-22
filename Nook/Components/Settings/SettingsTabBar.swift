@@ -17,8 +17,6 @@ struct SettingsTabBar: View {
                 state: .active
             )
             HStack {
-                MacButtonsView()
-                    .frame(width: 70, height: 32)
                 Spacer()
                 Text(nookSettings.currentSettingsTab.name)
                     .font(.headline)
