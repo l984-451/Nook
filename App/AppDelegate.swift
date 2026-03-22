@@ -60,13 +60,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         let didFinishOnboarding = userDefaults.bool(forKey: "settings.didFinishOnboarding")
 
         if let window = NSApplication.shared.windows.first {
-            // Always hide titlebar immediately to prevent flash during transitions
+            // Always hide titlebar text immediately to prevent flash during transitions
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.toolbar?.isVisible = false
-            window.standardWindowButton(.closeButton)?.isHidden = true
-            window.standardWindowButton(.zoomButton)?.isHidden = true
-            window.standardWindowButton(.miniaturizeButton)?.isHidden = true
 
             if !didFinishOnboarding {
                 window.setContentSize(NSSize(width: 1200, height: 720))

@@ -90,11 +90,6 @@ struct NavButtonsView: View {
         let shouldCollapseAIChat = sidebarWidthForLayout < aiChatCollapseThreshold
         
         HStack(spacing: 2) {
-            if sidebarOnLeft {
-                MacButtonsView()
-                    .frame(width: 70)
-            }
-            
             Button("Toggle Sidebar", systemImage: sidebarOnLeft ? "sidebar.left" : "sidebar.right") {
                 browserManager.toggleSidebar(for: windowState)
             }
@@ -172,10 +167,6 @@ struct NavButtonsView: View {
                     .foregroundStyle(Color.primary)
                 }
                 
-                if !sidebarOnLeft {
-                    MacButtonsView()
-                        .frame(width: 70)
-                }
             }
         }
         .frame(maxWidth: .infinity)
