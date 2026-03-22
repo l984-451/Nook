@@ -15,6 +15,49 @@ import WebKit
 @available(macOS 15.4, *)
 extension ExtensionManager {
 
+    // MARK: - Locale String Resolution
+
+    /// Resolve a `__MSG_key__` string using the extension's `_locales/` directory.
+    static func resolveLocaleString(_ value: String, in extensionDir: URL) -> String? {
+        guard value.hasPrefix("__MSG_") && value.hasSuffix("__") else { return nil }
+
+        let localesDir = extensionDir.appendingPathComponent("_locales")
+        guard FileManager.default.fileExists(atPath: localesDir.path) else { return nil }
+
+        guard let items = try? FileManager.default.contentsOfDirectory(at: localesDir, includingPropertiesForKeys: nil) else { return nil }
+
+        // Build locale candidate list
+        var candidates: [String] = []
+        let current = Locale.current
+        if let lang = current.language.languageCode?.identifier {
+            if let region = current.language.region?.identifier {
+                candidates.append("\(lang)_\(region)")
+                candidates.append("\(lang)-\(region)")
+            }
+            candidates.append(lang)
+        }
+        candidates.append("en")
+
+        // Find matching locale directory
+        var localeDir: URL?
+        for candidate in candidates {
+            if let match = items.first(where: { $0.lastPathComponent.caseInsensitiveCompare(candidate) == .orderedSame }) {
+                localeDir = match
+                break
+            }
+        }
+
+        guard let localeDir, let data = try? Data(contentsOf: localeDir.appendingPathComponent("messages.json")),
+              let messages = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+
+        let key = String(value.dropFirst(6).dropLast(2))
+        let entry = messages.first(where: { $0.key.caseInsensitiveCompare(key) == .orderedSame })?.value
+        if let dict = entry as? [String: Any], let text = dict["message"] as? String {
+            return text
+        }
+        return nil
+    }
+
     // MARK: - MV3 Support Methods
 
     // Note: commonPermissions array removed - now using minimalSafePermissions for better security
@@ -191,6 +234,27 @@ extension ExtensionManager {
 
         Self.logger.info("Extension ID: \(extensionId, privacy: .public), name: \(tempExtension.displayName ?? "Unknown", privacy: .public)")
 
+        // STEP 2.5: Check for duplicate — same name and version already installed
+        let newName = tempExtension.displayName
+            ?? Self.resolveLocaleString(
+                manifest["name"] as? String ?? "",
+                in: tempDir
+            )
+            ?? manifest["name"] as? String
+            ?? "Unknown"
+        let newVersion = manifest["version"] as? String ?? ""
+
+        if let existing = await MainActor.run(body: {
+            installedExtensions.first(where: { $0.name == newName && $0.version == newVersion })
+        }) {
+            // Clean up temp directory
+            try? FileManager.default.removeItem(at: tempDir)
+            Self.logger.warning("Duplicate extension: '\(newName, privacy: .public)' v\(newVersion, privacy: .public) already installed as \(existing.id, privacy: .public)")
+            throw ExtensionError.installationFailed(
+                "\(newName) v\(newVersion) is already installed"
+            )
+        }
+
         // STEP 3: Move files to final directory named after the extension ID
         if FileManager.default.fileExists(atPath: finalDestinationDir.path) {
             try FileManager.default.removeItem(at: finalDestinationDir)
@@ -208,14 +272,24 @@ extension ExtensionManager {
         Self.logger.info("WKWebExtension created from final path: \(finalDestinationDir.path, privacy: .public)")
         Self.logger.debug("Requested permissions: \(webExtension.requestedPermissions.map { String(describing: $0) }.joined(separator: ", "), privacy: .public)")
 
-        // Grant ALL permissions and match patterns at install time (Chrome behavior).
-        // allRequestedMatchPatterns includes content_scripts patterns, not just host_permissions.
+        // Grant only explicitly requested permissions (shown in install dialog).
+        // Optional permissions will be requested at runtime via chrome.permissions.request()
+        // and the promptForPermissions delegate.
         for p in webExtension.requestedPermissions {
             extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
+            Self.logger.info("Granted permission: \(String(describing: p), privacy: .public)")
         }
+        // Grant required match patterns only (host_permissions + content_scripts matches),
+        // excluding optional_host_permissions which should be requested at runtime.
+        let optionalMatches = webExtension.optionalPermissionMatchPatterns
         for m in webExtension.allRequestedMatchPatterns {
-            extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+            if !optionalMatches.contains(m) {
+                extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+                Self.logger.info("Granted match pattern: \(String(describing: m), privacy: .public)")
+            }
         }
+        // Optional permissions/match patterns will be handled at runtime via
+        // chrome.permissions.request() and the promptForPermissions delegate.
 
         // Enable Web Inspector for extension pages (background, popup)
         extensionContext.isInspectable = true
@@ -313,13 +387,11 @@ extension ExtensionManager {
                 do {
                     let data = try Data(contentsOf: messagesPath)
                     guard
-                        let manifest = try JSONSerialization.jsonObject(
+                        let messages = try JSONSerialization.jsonObject(
                             with: data
-                        ) as? [String: [String: String]]
+                        ) as? [String: Any]
                     else {
-                        throw ExtensionError.invalidManifest(
-                            "Invalid JSON structure"
-                        )
+                        return nil
                     }
 
                     // Remove the __MSG_ from the start and the __ at the end
@@ -327,15 +399,14 @@ extension ExtensionManager {
                         manifestValue.dropFirst(6).dropLast(2)
                     )
 
-                    guard
-                        let messageText = manifest[formattedManifestValue]?[
-                            "message"
-                        ] as? String
-                    else {
-                        return nil
+                    // Look up the key (case-insensitive) and extract "message"
+                    let entry = messages.first(where: { $0.key.caseInsensitiveCompare(formattedManifestValue) == .orderedSame })?.value
+                    if let dict = entry as? [String: Any],
+                       let messageText = dict["message"] as? String {
+                        return messageText
                     }
 
-                    return messageText
+                    return nil
                 } catch {
                     return nil
                 }
@@ -367,10 +438,9 @@ extension ExtensionManager {
         )
         Self.logger.info("Successfully installed extension '\(installedExtension.name, privacy: .public)'")
 
-        // All requested permissions and host patterns were already granted above
-        // (matching Chrome behavior — install = consent). Optional permissions will
-        // be handled at runtime via chrome.permissions.request() and the
-        // promptForPermissions delegate.
+        // Required permissions and match patterns were granted above.
+        // Optional permissions will be handled at runtime via
+        // chrome.permissions.request() and the promptForPermissions delegate.
 
         return installedExtension
     }
@@ -729,7 +799,50 @@ extension ExtensionManager {
         var loadedExtensions: [InstalledExtension] = []
         var enabledEntities: [(ExtensionEntity, [String: Any])] = []
 
+        // Prune broken entries (missing package directory or manifest) and
+        // duplicates (same name+version, keep the most recently installed).
+        var entitiesToRemove: [ExtensionEntity] = []
+        var seenExtensions: [String: ExtensionEntity] = [:]  // "name|version" -> entity
+
         for entity in entities {
+            let packageExists = FileManager.default.fileExists(
+                atPath: URL(fileURLWithPath: entity.packagePath)
+                    .appendingPathComponent("manifest.json").path
+            )
+            if !packageExists {
+                Self.logger.warning("Pruning broken extension entity '\(entity.name, privacy: .public)' — package missing at \(entity.packagePath, privacy: .public)")
+                entitiesToRemove.append(entity)
+                continue
+            }
+
+            let dedupeKey = "\(entity.name)|\(entity.version)"
+            if let existing = seenExtensions[dedupeKey] {
+                // Keep the newer install, remove the older one
+                let older = entity.installDate < existing.installDate ? entity : existing
+                Self.logger.warning("Pruning duplicate extension '\(entity.name, privacy: .public)' v\(entity.version, privacy: .public) (keeping newer)")
+                entitiesToRemove.append(older)
+                seenExtensions[dedupeKey] = entity.installDate >= existing.installDate ? entity : existing
+            } else {
+                seenExtensions[dedupeKey] = entity
+            }
+        }
+
+        if !entitiesToRemove.isEmpty {
+            for entity in entitiesToRemove {
+                // Remove package directory if it still exists
+                let packageURL = URL(fileURLWithPath: entity.packagePath)
+                if FileManager.default.fileExists(atPath: packageURL.path) {
+                    try? FileManager.default.removeItem(at: packageURL)
+                }
+                context.delete(entity)
+            }
+            try? context.save()
+            Self.logger.info("Pruned \(entitiesToRemove.count) broken/duplicate extension(s)")
+        }
+
+        let validEntities = entities.filter { !entitiesToRemove.contains($0) }
+
+        for entity in validEntities {
             let manifestURL = URL(fileURLWithPath: entity.packagePath)
                 .appendingPathComponent("manifest.json")
             do {
@@ -737,6 +850,14 @@ extension ExtensionManager {
                 // (idempotent — skips entries that already have a world set)
                 patchManifestForWebKit(at: manifestURL)
                 let manifest = try ExtensionUtils.validateManifest(at: manifestURL)
+                // Re-resolve __MSG_ names that weren't properly resolved at install time
+                if entity.name.hasPrefix("__MSG_") {
+                    let packageDir = URL(fileURLWithPath: entity.packagePath)
+                    if let resolved = Self.resolveLocaleString(entity.name, in: packageDir) {
+                        entity.name = resolved
+                        try? self.context.save()
+                    }
+                }
                 loadedExtensions.append(InstalledExtension(from: entity, manifest: manifest))
                 if entity.isEnabled {
                     enabledEntities.append((entity, manifest))
@@ -759,7 +880,7 @@ extension ExtensionManager {
         Task { @MainActor in
             // Phase 1: Parse all extensions in parallel (I/O-bound)
             // Extract Sendable values from PersistentModel entities before crossing actor boundary
-            let entityIndex = Dictionary(uniqueKeysWithValues: enabledEntities.map { ($0.0.packagePath, $0.0) })
+            let entityIndex = Dictionary(enabledEntities.map { ($0.0.packagePath, $0.0) }, uniquingKeysWith: { _, latest in latest })
             let parsed: [(ExtensionEntity, WKWebExtension)] = await withTaskGroup(
                 of: (String, String, WKWebExtension)?.self
             ) { group in
@@ -797,19 +918,37 @@ extension ExtensionManager {
 
                 Self.logger.info("Loading '\(webExtension.displayName ?? entity.name, privacy: .public)' MV\(webExtension.manifestVersion) hasBackground=\(webExtension.hasBackgroundContent)")
 
-                // Grant all permissions
+                // Grant explicitly requested permissions (shown at install time).
                 for p in webExtension.requestedPermissions {
                     extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
                 }
+                // Grant required match patterns only (host_permissions + content_scripts matches),
+                // excluding optional_host_permissions which should be requested at runtime.
+                let optionalMatches = webExtension.optionalPermissionMatchPatterns
+                let requiredMatches = webExtension.allRequestedMatchPatterns.filter { !optionalMatches.contains($0) }
+                for m in requiredMatches {
+                    extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+                }
+
+                // Restore previously-granted optional permissions so the extension
+                // doesn't re-prompt on every app launch.
+                let savedPerms = Set(entity.grantedOptionalPermissions ?? [])
+                var restoredPermCount = 0
                 for p in webExtension.optionalPermissions {
-                    extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
+                    if savedPerms.contains(String(describing: p)) {
+                        extensionContext.setPermissionStatus(.grantedExplicitly, for: p)
+                        restoredPermCount += 1
+                    }
                 }
-                for m in webExtension.allRequestedMatchPatterns {
-                    extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+                let savedMatches = Set(entity.grantedOptionalMatchPatterns ?? [])
+                var restoredMatchCount = 0
+                for m in optionalMatches {
+                    if savedMatches.contains(String(describing: m)) {
+                        extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
+                        restoredMatchCount += 1
+                    }
                 }
-                for m in webExtension.optionalPermissionMatchPatterns {
-                    extensionContext.setPermissionStatus(.grantedExplicitly, for: m)
-                }
+                Self.logger.debug("Granted \(webExtension.requestedPermissions.count) permissions and \(requiredMatches.count) match patterns for '\(entity.name, privacy: .public)' (restored \(restoredPermCount) optional permissions, \(restoredMatchCount) optional matches)")
 
                 extensionContext.isInspectable = true
 

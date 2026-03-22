@@ -65,13 +65,7 @@ class WebViewCoordinator {
     // MARK: - WebView Pool Management
 
     func getWebView(for tabId: UUID, in windowId: UUID) -> WKWebView? {
-        let webView = webViewsByTabAndWindow[tabId]?[windowId]
-        if let wv = webView {
-            print("🔍 [MEMDEBUG] WebViewCoordinator.getWebView() FOUND existing - Tab: \(tabId.uuidString.prefix(8)), Window: \(windowId.uuidString.prefix(8)), WebView: \(Unmanaged.passUnretained(wv).toOpaque())")
-        } else {
-            print("🔍 [MEMDEBUG] WebViewCoordinator.getWebView() NOT FOUND - Tab: \(tabId.uuidString.prefix(8)), Window: \(windowId.uuidString.prefix(8))")
-        }
-        return webView
+        return webViewsByTabAndWindow[tabId]?[windowId]
     }
 
     func getAllWebViews(for tabId: UUID) -> [WKWebView] {
@@ -95,37 +89,30 @@ class WebViewCoordinator {
     /// - Returns existing WebView if this window already has one
     func getOrCreateWebView(for tab: Tab, in windowId: UUID, tabManager: TabManager) -> WKWebView {
         let tabId = tab.id
-        
-        print("🔍 [MEMDEBUG] WebViewCoordinator.getOrCreateWebView() - Tab: \(tabId.uuidString.prefix(8)), Window: \(windowId.uuidString.prefix(8))")
-        
+
         // Check if this window already has a WebView for this tab
         if let existing = getWebView(for: tabId, in: windowId) {
-            print("🔍 [MEMDEBUG]   -> Returning EXISTING WebView for this window: \(Unmanaged.passUnretained(existing).toOpaque())")
             return existing
         }
-        
+
         // Check if another window already has this tab displayed
         let allWindowsForTab = webViewsByTabAndWindow[tabId] ?? [:]
         let otherWindows = allWindowsForTab.filter { $0.key != windowId }
-        
-        print("🔍 [MEMDEBUG]   Tab currently displayed in \(allWindowsForTab.count) window(s), other windows: \(otherWindows.count)")
-        
+
         if otherWindows.isEmpty {
             // This is the FIRST window to display this tab
             // Create the "primary" WebView and assign it to this tab
-            print("🔍 [MEMDEBUG]   -> No other windows, creating PRIMARY WebView")
             let primaryWebView = createPrimaryWebView(for: tab, in: windowId)
-            
+
             // Assign this WebView as the tab's primary
             tab.assignWebViewToWindow(primaryWebView, windowId: windowId)
-            
+
             return primaryWebView
         } else {
             // Another window is already displaying this tab
             // Create a "clone" WebView for this window
-            print("🔍 [MEMDEBUG]   -> Other window(s) exist, creating CLONE WebView")
             let cloneWebView = createCloneWebView(for: tab, in: windowId, primaryWindowId: otherWindows.first!.key)
-            
+
             return cloneWebView
         }
     }
@@ -133,32 +120,20 @@ class WebViewCoordinator {
     /// Creates the "primary" WebView - the first WebView for a tab
     /// This WebView is owned by the tab and is the "source of truth"
     private func createPrimaryWebView(for tab: Tab, in windowId: UUID) -> WKWebView {
-        let tabId = tab.id
-        
-        print("🔍 [MEMDEBUG] Creating PRIMARY WebView - Tab: \(tabId.uuidString.prefix(8)), Window: \(windowId.uuidString.prefix(8))")
-        
         // Use the standard creation logic but mark it as primary
-        let webView = createWebViewInternal(for: tab, in: windowId, isPrimary: true)
-        
-        print("🔍 [MEMDEBUG]   -> Primary WebView created: \(Unmanaged.passUnretained(webView).toOpaque())")
-        return webView
+        return createWebViewInternal(for: tab, in: windowId, isPrimary: true)
     }
     
     /// Creates a "clone" WebView - additional WebViews for multi-window display
     /// These share the configuration but are separate instances
     private func createCloneWebView(for tab: Tab, in windowId: UUID, primaryWindowId: UUID) -> WKWebView {
         let tabId = tab.id
-        
-        print("🔍 [MEMDEBUG] Creating CLONE WebView - Tab: \(tabId.uuidString.prefix(8)), Window: \(windowId.uuidString.prefix(8)), PrimaryWindow: \(primaryWindowId.uuidString.prefix(8))")
-        
+
         // Get the primary WebView to copy configuration
         let primaryWebView = getWebView(for: tabId, in: primaryWindowId)
-        
+
         // Create clone with shared configuration
-        let webView = createWebViewInternal(for: tab, in: windowId, isPrimary: false, copyFrom: primaryWebView)
-        
-        print("🔍 [MEMDEBUG]   -> Clone WebView created: \(Unmanaged.passUnretained(webView).toOpaque())")
-        return webView
+        return createWebViewInternal(for: tab, in: windowId, isPrimary: false, copyFrom: primaryWebView)
     }
     
     /// Internal method to create a WebView with proper configuration
@@ -212,17 +187,7 @@ class WebViewCoordinator {
         newWebView.isMuted = tab.isAudioMuted
         
         setWebView(newWebView, for: tabId, in: windowId)
-        
-        let typeStr = isPrimary ? "PRIMARY" : "CLONE"
-        print("🔍 [MEMDEBUG] WebViewCoordinator CREATED \(typeStr) WebView - Tab: \(tabId.uuidString.prefix(8)), Window: \(windowId.uuidString.prefix(8)), WebView: \(Unmanaged.passUnretained(newWebView).toOpaque()), DataStore: \(configuration.websiteDataStore.identifier?.uuidString.prefix(8) ?? "default")")
-        
-        // Log all WebViews now tracked for this tab
-        let allWebViewsForTab = getAllWebViews(for: tabId)
-        print("🔍 [MEMDEBUG]   Total WebViews for tab \(tabId.uuidString.prefix(8)): \(allWebViewsForTab.count)")
-        for (index, wv) in allWebViewsForTab.enumerated() {
-            print("🔍 [MEMDEBUG]     [\(index)] WebView: \(Unmanaged.passUnretained(wv).toOpaque())")
-        }
-        
+
         return newWebView
     }
 
@@ -316,12 +281,6 @@ class WebViewCoordinator {
     func createWebView(for tab: Tab, in windowId: UUID) -> WKWebView {
         let tabId = tab.id
         
-        print("🔍 [MEMDEBUG] WebViewCoordinator.createWebView() START - Tab: \(tabId.uuidString.prefix(8)), Window: \(windowId.uuidString.prefix(8)), TabName: \(tab.name)")
-        print("🔍 [MEMDEBUG]   tab.existingWebView exists: \(tab.existingWebView != nil), tab.webView exists: \(tab.webView != nil)")
-        if let tabWebView = tab.existingWebView {
-            print("🔍 [MEMDEBUG]   Tab's existingWebView: \(Unmanaged.passUnretained(tabWebView).toOpaque())")
-        }
-
         // Derive config from shared config or existing webview to preserve
         // process pool + extension controller (fresh configs break content script injection)
         let configuration: WKWebViewConfiguration
@@ -364,15 +323,6 @@ class WebViewCoordinator {
 
         setWebView(newWebView, for: tabId, in: windowId)
 
-        print("🔍 [MEMDEBUG] WebViewCoordinator CREATED WINDOW-SPECIFIC WebView - Tab: \(tabId.uuidString.prefix(8)), Window: \(windowId.uuidString.prefix(8)), WebView: \(Unmanaged.passUnretained(newWebView).toOpaque()), DataStore: \(configuration.websiteDataStore.identifier?.uuidString.prefix(8) ?? "default")")
-        
-        // Log all WebViews now tracked for this tab
-        let allWebViewsForTab = getAllWebViews(for: tabId)
-        print("🔍 [MEMDEBUG]   Total WebViews for tab \(tabId.uuidString.prefix(8)): \(allWebViewsForTab.count)")
-        for (index, wv) in allWebViewsForTab.enumerated() {
-            print("🔍 [MEMDEBUG]     [\(index)] WebView: \(Unmanaged.passUnretained(wv).toOpaque())")
-        }
-        
         return newWebView
     }
 

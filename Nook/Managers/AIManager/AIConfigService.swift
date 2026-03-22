@@ -340,7 +340,7 @@ class AIConfigService {
             activeModelId: nil,
             generationConfig: AIGenerationConfig(),
             mcpServers: [],
-            browserToolsConfig: BrowserToolsConfig()
+            browserToolsConfig: BrowserToolsConfig(executionMode: .askBeforeExecuting)
         )
     }
 

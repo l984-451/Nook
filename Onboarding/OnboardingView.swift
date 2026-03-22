@@ -37,7 +37,8 @@ struct OnboardingView: View {
                         currentStage: currentStage,
                         isLoading: isLoading,
                         onContinue: advance,
-                        onBack: goBack
+                        onBack: goBack,
+                        onSkip: skipImport
                     )
                 }
             }
@@ -88,6 +89,7 @@ struct OnboardingView: View {
 
     private func applySettings() {
         nookSettings.showAIAssistant = aiChatEnabled
+        nookSettings.adBlockerEnabled = adBlockerEnabled
         nookSettings.blockCrossSiteTracking = adBlockerEnabled
         nookSettings.currentMaterial = selectedMaterial
         nookSettings.topBarAddressView = topBarAddressView
@@ -135,6 +137,12 @@ struct OnboardingView: View {
             await MainActor.run {
                 completion()
             }
+        }
+    }
+
+    private func skipImport() {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            currentStage = 2
         }
     }
 

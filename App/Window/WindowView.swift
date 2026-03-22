@@ -12,6 +12,7 @@ import UniversalGlass
 /// Main window view that orchestrates the browser UI layout
 struct WindowView: View {
     @EnvironmentObject var browserManager: BrowserManager
+    @EnvironmentObject var tabManager: TabManager
     @Environment(BrowserWindowState.self) private var windowState
     @Environment(CommandPalette.self) private var commandPalette
     @Environment(WindowRegistry.self) private var windowRegistry
@@ -27,7 +28,7 @@ struct WindowView: View {
                     Button("Customize Space Gradient...") {
                         browserManager.showGradientEditor()
                     }
-                    .disabled(browserManager.tabManager.currentSpace == nil)
+                    .disabled(tabManager.currentSpace == nil)
                 }
 
             SidebarWebViewStack()
@@ -142,7 +143,15 @@ struct WindowView: View {
         .environmentObject(browserManager.gradientColorManager)
         .environmentObject(browserManager.splitManager)
         .environmentObject(hoverSidebarManager)
-        .preferredColorScheme(windowState.gradient.primaryColor.isPerceivedDark ? .dark : .light)
+        .preferredColorScheme(resolvedColorScheme)
+    }
+
+    private var resolvedColorScheme: ColorScheme? {
+        switch nookSettings.appearanceMode {
+        case .light: return .light
+        case .dark: return .dark
+        case .system: return nil  // Follow system appearance
+        }
     }
 
     // MARK: - Layout Components

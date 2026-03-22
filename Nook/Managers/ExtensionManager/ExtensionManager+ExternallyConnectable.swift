@@ -314,6 +314,7 @@ extension ExtensionManager {
 
                         function handler(event) {
                             if (event.source !== window) return;
+                            if (event.origin !== window.location.origin) return;
                             if (!event.data || event.data.type !== 'nook_ec_response') return;
                             if (!matchesActiveRuntimeId(event.data.targetRuntimeId)) return;
                             if (event.data.callbackId !== callbackId) return;
@@ -341,7 +342,7 @@ extension ExtensionManager {
                             message: parsed.message,
                             options: parsed.options,
                             callbackId: callbackId
-                        }, '*');
+                        }, window.location.origin);
                     });
                 });
 
@@ -398,7 +399,7 @@ extension ExtensionManager {
                             targetRuntimeId: activeRuntimeId(),
                             portId: portId,
                             message: message
-                        }, '*');
+                        }, window.location.origin);
                     },
                     disconnect: function() {
                         if (entry.disconnected) return;
@@ -406,7 +407,7 @@ extension ExtensionManager {
                             type: 'nook_ec_connect_close',
                             targetRuntimeId: activeRuntimeId(),
                             portId: portId
-                        }, '*');
+                        }, window.location.origin);
                         closeBridgePort(portId, null);
                     },
                     onMessage: onMessage,
@@ -423,7 +424,7 @@ extension ExtensionManager {
                         extensionId: parsed.extensionId,
                         connectInfo: connectInfo,
                         portId: portId
-                    }, '*');
+                    }, window.location.origin);
                 }).catch(function(error) {
                     var message = (error && error.message) ? error.message : String(error);
                     console.warn('[NOOK-EC] Bridge port open failed id=' + portId + ': ' + message);
@@ -534,6 +535,7 @@ extension ExtensionManager {
 
             window.addEventListener('message', function(event) {
                 if (event.source !== window) return;
+                if (event.origin !== window.location.origin) return;
                 if (!event.data || typeof event.data.type !== 'string') return;
                 if (event.data.type === 'nook_ec_bridge_ready') {
                     adoptBridgeRuntime(event.data.targetRuntimeId);
@@ -612,6 +614,7 @@ extension ExtensionManager {
               var manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
 
+        let extensionDirName = manifestURL.deletingLastPathComponent().lastPathComponent
         var changed = false
 
         // --- Revert any previous MAIN-world patches on domain-specific content scripts ---
@@ -680,6 +683,7 @@ extension ExtensionManager {
                 contentScripts.append(bridgeEntry)
                 manifest["content_scripts"] = contentScripts
                 changed = true
+                Self.logger.warning("Extension manifest modified: injected nook_bridge.js into \(extensionDirName, privacy: .public)")
             }
 
             // Always refresh bridge file to keep compatibility fixes for already-installed extensions.
@@ -727,7 +731,7 @@ extension ExtensionManager {
                     window.postMessage({
                         type: 'nook_ec_bridge_ready',
                         targetRuntimeId: currentRuntimeId()
-                    }, '*');
+                    }, window.location.origin);
                 }
 
                 announceReady();
@@ -751,7 +755,7 @@ extension ExtensionManager {
                             callbackId: data.callbackId,
                             targetRuntimeId: currentRuntimeId(),
                             error: 'runtime.sendMessage unavailable'
-                        }, '*');
+                        }, window.location.origin);
                         return;
                     }
 
@@ -802,7 +806,7 @@ extension ExtensionManager {
                             callbackId: callbackId,
                             targetRuntimeId: currentRuntimeId(),
                             response: response
-                        }, '*');
+                        }, window.location.origin);
                     }).catch(function(error) {
                         console.warn('[NOOK-EC] Relay error type=' + outgoingType + ': ' + ((error && error.message) ? error.message : String(error)));
                         window.postMessage({
@@ -810,7 +814,7 @@ extension ExtensionManager {
                             callbackId: callbackId,
                             targetRuntimeId: currentRuntimeId(),
                             error: (error && error.message) ? error.message : String(error)
-                        }, '*');
+                        }, window.location.origin);
                     });
                 }
 
@@ -824,7 +828,7 @@ extension ExtensionManager {
                             portId: portId,
                             targetRuntimeId: currentRuntimeId(),
                             error: 'runtime.connect unavailable'
-                        }, '*');
+                        }, window.location.origin);
                         return;
                     }
 
@@ -845,7 +849,7 @@ extension ExtensionManager {
                             portId: portId,
                             targetRuntimeId: currentRuntimeId(),
                             error: (error && error.message) ? error.message : String(error)
-                        }, '*');
+                        }, window.location.origin);
                         return;
                     }
 
@@ -856,7 +860,7 @@ extension ExtensionManager {
                             portId: portId,
                             targetRuntimeId: currentRuntimeId(),
                             message: message
-                        }, '*');
+                        }, window.location.origin);
                     });
                     port.onDisconnect.addListener(function() {
                         var error = lastErrorMessage();
@@ -867,14 +871,14 @@ extension ExtensionManager {
                             portId: portId,
                             targetRuntimeId: currentRuntimeId(),
                             error: error
-                        }, '*');
+                        }, window.location.origin);
                     });
 
                     window.postMessage({
                         type: 'nook_ec_connect_opened',
                         portId: portId,
                         targetRuntimeId: currentRuntimeId()
-                    }, '*');
+                    }, window.location.origin);
                 }
 
                 function relayConnectPost(data) {
@@ -889,7 +893,7 @@ extension ExtensionManager {
                             portId: data.portId,
                             targetRuntimeId: currentRuntimeId(),
                             error: (error && error.message) ? error.message : String(error)
-                        }, '*');
+                        }, window.location.origin);
                     }
                 }
 
@@ -906,11 +910,12 @@ extension ExtensionManager {
                         portId: portId,
                         targetRuntimeId: currentRuntimeId(),
                         error: null
-                    }, '*');
+                    }, window.location.origin);
                 }
 
                 window.addEventListener('message', function(event) {
                     if (event.source !== window) return;
+                    if (event.origin !== window.location.origin) return;
                     if (!event.data || typeof event.data.type !== 'string') return;
                     if (event.data.type === 'nook_ec_request') {
                         if (!isTargetedMessage(event.data)) return;
@@ -960,7 +965,7 @@ extension ExtensionManager {
                 permissions.append("scripting")
                 manifest["permissions"] = permissions
                 changed = true
-                Self.logger.info("patchManifestForWebKit: added 'scripting' permission for MV2 extension")
+                Self.logger.warning("Extension manifest modified: added 'scripting' permission to \(extensionDirName, privacy: .public)")
             }
         }
 
@@ -988,7 +993,7 @@ extension ExtensionManager {
                 contentScripts.append(iframeBridgeEntry)
                 manifest["content_scripts"] = contentScripts
                 changed = true
-                Self.logger.info("patchManifestForWebKit: added nook_iframe_bridge.js for Bitwarden iframe message forwarding")
+                Self.logger.warning("Extension manifest modified: injected nook_iframe_bridge.js (Bitwarden special-case) into \(extensionDirName, privacy: .public)")
             }
 
             // Write the bridge file
@@ -1054,6 +1059,7 @@ extension ExtensionManager {
         if changed {
             if let updatedData = try? JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]) {
                 try? updatedData.write(to: manifestURL)
+                Self.logger.warning("Extension manifest written to disk for \(extensionDirName, privacy: .public)")
             }
         }
     }

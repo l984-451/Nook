@@ -47,6 +47,40 @@ final class StdioTransport: MCPTransportProtocol, @unchecked Sendable {
         process.standardError = FileHandle.nullDevice
 
         var env = ProcessInfo.processInfo.environment
+
+        // Remove sensitive environment variables that shouldn't be passed to MCP servers
+        let sensitiveKeys: Set<String> = [
+            "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+            "GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN",
+            "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+            "DATABASE_URL", "DB_PASSWORD",
+            "SECRET_KEY", "PRIVATE_KEY",
+            "STRIPE_SECRET_KEY", "TWILIO_AUTH_TOKEN",
+        ]
+        let beforeCount = env.count
+        for key in sensitiveKeys {
+            env.removeValue(forKey: key)
+        }
+        // Also remove any key containing "SECRET", "PASSWORD", "PRIVATE_KEY", or "_TOKEN"
+        // (but keep PATH, HOME, TERM, etc.)
+        let safePatterns: Set<String> = ["PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "LC_", "TMPDIR", "XDG_"]
+        env = env.filter { (key, _) in
+            let upper = key.uppercased()
+            // Keep if it's a known-safe key
+            if safePatterns.contains(where: { upper.hasPrefix($0) }) { return true }
+            // Remove if it looks like a secret
+            if upper.contains("SECRET") || upper.contains("PASSWORD") || upper.contains("PRIVATE_KEY") { return false }
+            if upper.contains("_TOKEN") && !upper.hasPrefix("DBUS") { return false }
+            if upper.contains("_API_KEY") { return false }
+            // Keep everything else
+            return true
+        }
+        let filteredCount = beforeCount - env.count
+        if filteredCount > 0 {
+            Self.log.info("Filtered \(filteredCount) sensitive environment variables from MCP subprocess")
+        }
+
+        // Apply user-specified env vars (these are intentional)
         for (key, value) in envVars {
             env[key] = value
         }
@@ -180,9 +214,19 @@ final class SSETransport: MCPTransportProtocol, @unchecked Sendable {
     }
 
     func connect() async throws {
-        guard URL(string: url) != nil else {
+        guard let parsedURL = URL(string: url) else {
             throw MCPTransportError.invalidURL
         }
+
+        // Require HTTPS for non-local connections to prevent MITM attacks
+        let scheme = parsedURL.scheme?.lowercased() ?? ""
+        let host = parsedURL.host?.lowercased() ?? ""
+        let isLocal = host == "localhost" || host == "127.0.0.1" || host == "::1"
+        if scheme != "https" && !isLocal {
+            Self.log.warning("MCP SSE transport requires HTTPS for non-local connections. Got: \(scheme)://\(host)")
+            throw MCPTransportError.invalidURL
+        }
+
         Self.log.info("Connected to SSE endpoint: \(self.url)")
     }
 

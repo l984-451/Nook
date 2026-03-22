@@ -13,6 +13,7 @@ import Sparkle
 
 struct SpacesSideBarView: View {
     @EnvironmentObject var browserManager: BrowserManager
+    @EnvironmentObject var tabManager: TabManager
     @Environment(BrowserWindowState.self) private var windowState
     @Environment(WindowRegistry.self) private var windowRegistry
     @Environment(\.nookSettings) var nookSettings
@@ -59,7 +60,7 @@ struct SpacesSideBarView: View {
 
     private var mainSidebarContent: some View {
         let effectiveProfileId = windowState.currentProfileId ?? browserManager.currentProfile?.id
-        let essentialsCount = effectiveProfileId.map { browserManager.tabManager.essentialTabs(for: $0).count } ?? 0
+        let essentialsCount = effectiveProfileId.map { tabManager.essentialTabs(for: $0).count } ?? 0
         let shouldAnimate = (windowRegistry.activeWindow?.id == windowState.id) && !browserManager.isTransitioningProfile
 
         return VStack(spacing: 8) {
@@ -160,7 +161,7 @@ struct SpacesSideBarView: View {
     private var spacesPageView: some View {
         let spaces = windowState.isIncognito
             ? windowState.ephemeralSpaces
-            : browserManager.tabManager.spaces
+            : tabManager.spaces
 
         return Group {
             if spaces.isEmpty {
@@ -251,8 +252,8 @@ struct SpacesSideBarView: View {
             }
 
             Button {
-                if let currentSpace = browserManager.tabManager.currentSpace {
-                    browserManager.tabManager.createFolder(for: currentSpace.id)
+                if let currentSpace = tabManager.currentSpace {
+                    tabManager.createFolder(for: currentSpace.id)
                 }
             } label: {
                 Label("New Folder", systemImage: "folder.badge.plus")
@@ -333,10 +334,10 @@ struct SpacesSideBarView: View {
                 isActive: windowState.currentSpaceId == space.id,
                 isSidebarHovered: $isSidebarHovered,
                 onActivateTab: { browserManager.selectTab($0, in: windowState) },
-                onCloseTab: { browserManager.tabManager.removeTab($0.id) },
-                onPinTab: { browserManager.tabManager.pinTab($0) },
-                onMoveTabUp: { browserManager.tabManager.moveTabUp($0.id) },
-                onMoveTabDown: { browserManager.tabManager.moveTabDown($0.id) },
+                onCloseTab: { tabManager.removeTab($0.id) },
+                onPinTab: { tabManager.pinTab($0) },
+                onMoveTabUp: { tabManager.moveTabUp($0.id) },
+                onMoveTabDown: { tabManager.moveTabDown($0.id) },
                 onMuteTab: { $0.toggleMute() }
             )
             .environmentObject(browserManager)
@@ -358,17 +359,17 @@ struct SpacesSideBarView: View {
                 onCreate: { name, icon, profileId in
                     let finalName = name.isEmpty ? "New Space" : name
                     let finalIcon = icon.isEmpty ? "✨" : icon
-                    let newSpace = browserManager.tabManager.createSpace(
+                    let newSpace = tabManager.createSpace(
                         name: finalName,
                         icon: finalIcon
                     )
 
                     // Assign profile if one was selected
                     if let profileId = profileId {
-                        browserManager.tabManager.assign(spaceId: newSpace.id, toProfile: profileId)
+                        tabManager.assign(spaceId: newSpace.id, toProfile: profileId)
                     }
 
-                    if let targetIndex = browserManager.tabManager.spaces.firstIndex(where: { $0.id == newSpace.id }) {
+                    if let targetIndex = tabManager.spaces.firstIndex(where: { $0.id == newSpace.id }) {
                         activeSpaceIndex = targetIndex
                     }
 
@@ -393,14 +394,14 @@ struct SpacesSideBarView: View {
 
                     do {
                         if newIcon != targetSpace.icon {
-                            try browserManager.tabManager.updateSpaceIcon(
+                            try tabManager.updateSpaceIcon(
                                 spaceId: spaceId,
                                 icon: newIcon
                             )
                         }
 
                         if newName != targetSpace.name {
-                            try browserManager.tabManager.renameSpace(
+                            try tabManager.renameSpace(
                                 spaceId: spaceId,
                                 newName: newName
                             )
@@ -408,7 +409,7 @@ struct SpacesSideBarView: View {
 
                         // Update profile if changed
                         if newProfileId != targetSpace.profileId, let profileId = newProfileId {
-                            browserManager.tabManager.assign(spaceId: spaceId, toProfile: profileId)
+                            tabManager.assign(spaceId: spaceId, toProfile: profileId)
                         }
 
                         browserManager.dialogManager.closeDialog()
@@ -432,13 +433,13 @@ struct SpacesSideBarView: View {
             return windowState.ephemeralSpaces.first
         }
         
-        if let current = browserManager.tabManager.currentSpace {
+        if let current = tabManager.currentSpace {
             return current
         }
         if let currentId = windowState.currentSpaceId {
-            return browserManager.tabManager.spaces.first { $0.id == currentId }
+            return tabManager.spaces.first { $0.id == currentId }
         }
-        return browserManager.tabManager.spaces.first
+        return tabManager.spaces.first
     }
 
     // MARK: - Computed Properties

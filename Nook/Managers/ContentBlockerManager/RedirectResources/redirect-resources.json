@@ -1,0 +1,207 @@
+{
+  "1x1.gif": {
+    "data": "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+    "encoding": "base64",
+    "mimeType": "image/gif"
+  },
+  "2x2.png": {
+    "data": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAC0lEQVQI12NgAAIABAABInqUQAAAABJRU5ErkJggg==",
+    "encoding": "base64",
+    "mimeType": "image/png"
+  },
+  "3x2.png": {
+    "data": "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAC0lEQVQI12NgAAIABAABInqUQAAAABJRU5ErkJggg==",
+    "encoding": "base64",
+    "mimeType": "image/png"
+  },
+  "32x32.png": {
+    "data": "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAGklEQVRYR+3BAQEAAACCIP+vbkhAAQAAAO8GECAAAUFg2X4AAAAASUVORK5CYII=",
+    "encoding": "base64",
+    "mimeType": "image/png"
+  },
+  "noop.js": {
+    "data": "(function() {})()",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "noop.html": {
+    "data": "<!DOCTYPE html>",
+    "encoding": "text",
+    "mimeType": "text/html"
+  },
+  "noop.txt": {
+    "data": "",
+    "encoding": "text",
+    "mimeType": "text/plain"
+  },
+  "noop.json": {
+    "data": "{}",
+    "encoding": "text",
+    "mimeType": "application/json"
+  },
+  "noop-0.1s.mp3": {
+    "data": "SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYLeAJ5AAAAAAAAAAAAAAAAAAAAAP/7UMQAA8AAAaQAAAAgAAA0gAAABExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV",
+    "encoding": "base64",
+    "mimeType": "audio/mpeg"
+  },
+  "noop-0.5s.mp3": {
+    "data": "SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYLeAJ5AAAAAAAAAAAAAAAAAAAAAP/7UMQAA8AAAaQAAAAgAAA0gAAABExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV",
+    "encoding": "base64",
+    "mimeType": "audio/mpeg"
+  },
+  "noop-1s.mp4": {
+    "data": "AAAAGGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAAAhtZGF0AAAA1m1vb3YAAABsbXZoZAAAAAAAAAAAAAAAAAAAA+gAAAPoAAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjU4Ljc2LjEwMA==",
+    "encoding": "base64",
+    "mimeType": "video/mp4"
+  },
+  "noop-vast2.xml": {
+    "data": "<VAST version=\"2.0\"></VAST>",
+    "encoding": "text",
+    "mimeType": "text/xml"
+  },
+  "noop-vast3.xml": {
+    "data": "<VAST version=\"3.0\"></VAST>",
+    "encoding": "text",
+    "mimeType": "text/xml"
+  },
+  "noop-vast4.xml": {
+    "data": "<VAST version=\"4.0\"></VAST>",
+    "encoding": "text",
+    "mimeType": "text/xml"
+  },
+  "noop-vmap1.xml": {
+    "data": "<vmap:VMAP xmlns:vmap=\"http://www.iab.net/videosuite/vmap\" version=\"1.0\"></vmap:VMAP>",
+    "encoding": "text",
+    "mimeType": "text/xml"
+  },
+  "empty": {
+    "data": "",
+    "encoding": "text",
+    "mimeType": "text/plain"
+  },
+  "click2load.html": {
+    "data": "<!DOCTYPE html><html><head><style>body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif;background:#f0f0f0;cursor:pointer}p{color:#666;font-size:14px}</style></head><body onclick=\"window.location.reload()\"><p>Click to load</p></body></html>",
+    "encoding": "text",
+    "mimeType": "text/html"
+  },
+  "google-analytics_analytics.js": {
+    "data": "(function(){var noopfn=function(){};var w=window;w.ga=w.ga||function(){(w.ga.q=w.ga.q||[]).push(arguments)};w.ga.l=Date.now();w.ga.create=noopfn;w.ga.getByName=function(){return null};w.ga.getAll=function(){return[]};w.ga.remove=noopfn;w.ga.loaded=true;var p=w.ga.P;if(p){p.get=noopfn;p.set=noopfn;p.send=noopfn}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "google-analytics_ga.js": {
+    "data": "(function(){var w=window;function Gaq(){this.push=function(a){if(typeof a==='function'){a()}};this._getAsyncTracker=function(){return this};this._getPlugin=function(){return{}}}var p=Gaq.prototype;p._addTrans=p._clearOrganic=p._clearIgnoredOrganic=p._clearIgnoredRef=p._createAsyncTracker=p._deleteCustomVar=p._getName=p._initData=p._link=p._linkByPost=p._setAccount=p._setCampCIdKey=p._setCampContentKey=p._setCampIdKey=p._setCampMediumKey=p._setCampNOKey=p._setCampNameKey=p._setCampSourceKey=p._setCampTermKey=p._setCampaignCookieTimeout=p._setCampaignTrack=p._setClientInfo=p._setCookiePath=p._setCookiePersistence=p._setCustomVar=p._setDetectFlash=p._setDetectTitle=p._setDomainName=p._setLocalGifPath=p._setLocalRemoteServerMode=p._setLocalServerMode=p._setReferrerOverride=p._setRemoteServerMode=p._setSampleRate=p._setSessionTimeout=p._setSiteSpeedSampleRate=p._setSessionCookieTimeout=p._setVar=p._setVisitorCookieTimeout=p._trackEvent=p._trackPageLoadTime=p._trackPageview=p._trackSocial=p._trackTiming=p._trackTrans=p._visitCode=function(){};w._gaq=new Gaq();w._gat={_getTracker:function(){return w._gaq},_createTracker:function(){return w._gaq},_getTrackerByName:function(){return w._gaq},_getTrackers:function(){return[]}}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "googlesyndication_adsbygoogle.js": {
+    "data": "(function(){var w=window;var push=function(){};w.adsbygoogle={loaded:true,push:push,length:0};var ad=document.querySelectorAll('ins.adsbygoogle');for(var i=0;i<ad.length;i++){ad[i].dataset.adsbygoogleStatus='done';ad[i].style.height='0px';ad[i].style.display='none'}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "googletagservices_gpt.js": {
+    "data": "(function(){var noopfn=function(){};var noopthisfn=function(){return this};var w=window;w.googletag=w.googletag||{};var gt=w.googletag;gt.apiReady=true;gt.cmd=gt.cmd||[];gt.cmd.push=function(a){try{a()}catch(e){}return 1};gt.companionAds=function(){return{setRefreshUnfilledSlots:noopfn}};gt.content=function(){return{setContent:noopfn}};gt.defineOutOfPageSlot=function(){return{addService:noopthisfn,defineSizeMapping:noopthisfn,setTargeting:noopthisfn}};gt.defineSlot=function(){return{addService:noopthisfn,clearCategoryExclusions:noopthisfn,clearTargeting:noopthisfn,defineSizeMapping:noopthisfn,get:noopfn,getAdUnitPath:function(){return''},getAttributeKeys:function(){return[]},getCategoryExclusions:function(){return[]},getResponseInformation:function(){return null},getSlotElementId:function(){return''},getTargeting:function(){return[]},getTargetingKeys:function(){return[]},set:noopthisfn,setCategoryExclusion:noopthisfn,setClickUrl:noopthisfn,setCollapseEmptyDiv:noopthisfn,setTargeting:noopthisfn,updateTargetingFromMap:noopthisfn}};gt.destroySlots=noopfn;gt.disablePublisherConsole=noopfn;gt.display=noopfn;gt.enableServices=noopfn;gt.getVersion=function(){return''};gt.pubads=function(){return{addEventListener:noopthisfn,clear:noopfn,clearCategoryExclusions:noopthisfn,clearTagForChildDirectedTreatment:noopthisfn,clearTargeting:noopthisfn,collapseEmptyDivs:noopfn,defineOutOfPagePassback:function(){return{display:noopfn}},definePassback:function(){return{display:noopfn}},disableInitialLoad:noopfn,display:noopfn,enableAsyncRendering:noopfn,enableLazyLoad:noopfn,enableSingleRequest:noopfn,enableSyncRendering:noopfn,enableVideoAds:noopfn,get:noopfn,getAttributeKeys:function(){return[]},getTargeting:function(){return[]},getTargetingKeys:function(){return[]},getSlots:function(){return[]},refresh:noopfn,set:noopthisfn,setCategoryExclusion:noopthisfn,setCentering:noopfn,setCookieOptions:noopfn,setForceSafeFrame:noopthisfn,setLocation:noopthisfn,setPrivacySettings:noopthisfn,setPublisherProvidedId:noopthisfn,setRequestNonPersonalizedAds:noopthisfn,setSafeFrameConfig:noopthisfn,setTagForChildDirectedTreatment:noopthisfn,setTargeting:noopthisfn,setVideoContent:noopthisfn,updateCorrelator:noopfn}};gt.setAdIframeTitle=noopfn;gt.sizeMapping=function(){return{addSize:noopthisfn,build:function(){return[]}}};for(var i=0;i<gt.cmd.length;i++){try{gt.cmd[i]()}catch(e){}}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "doubleclick_instream_ad_status.js": {
+    "data": "(function(){window.google_ad_status=1})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "amazon_apstag.js": {
+    "data": "(function(){var noopfn=function(){};var w=window;w.apstag={init:noopfn,fetchBids:function(a,b){if(typeof b==='function'){b([])}},setDisplayBids:noopfn,targetingKeys:function(){return[]},_Q:[],_getQ:noopfn,debug:noopfn}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "scorecardresearch_beacon.js": {
+    "data": "(function(){window.COMSCORE={beacon:function(){},purge:function(){},tag:function(){return{}}}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "outbrain-widget.js": {
+    "data": "(function(){var noopfn=function(){};window.OBR=window.OBR||{};window.OBR.extern={video:{get498:noopfn,setup:noopfn}};window.OB_ADV_ID='';window.OBR.extern.video=window.OBR.extern.video||{get498:noopfn,setup:noopfn}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "chartbeat.js": {
+    "data": "(function(){window._sf_async_config=window._sf_async_config||{};window._sf_endpt=window._sf_endpt||''})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "google-ima.js": {
+    "data": "(function(){var noopfn=function(){};var w=window;if(!w.google){w.google={}}w.google.ima={AdDisplayContainer:function(c){this.destroy=noopfn;this.initialize=noopfn},AdError:function(t,c,m){this.getErrorCode=function(){return 0};this.getInnerError=function(){return null};this.getMessage=function(){return''};this.getType=function(){return''};this.getVastErrorCode=function(){return 0};this.toString=function(){return''}},AdErrorEvent:{Type:{AD_ERROR:'adError'}},AdEvent:{Type:{AD_BREAK_READY:'adBreakReady',AD_METADATA:'adMetadata',ALL_ADS_COMPLETED:'allAdsCompleted',CLICK:'click',COMPLETE:'complete',CONTENT_PAUSE_REQUESTED:'contentPauseRequested',CONTENT_RESUME_REQUESTED:'contentResumeRequested',FIRST_QUARTILE:'firstQuartile',IMPRESSION:'impression',INTERACTION:'interaction',LINEAR_CHANGED:'linearChanged',LOADED:'loaded',LOG:'log',MIDPOINT:'midpoint',PAUSED:'paused',RESUMED:'resumed',SKIPPABLE_STATE_CHANGED:'skippableStateChanged',SKIPPED:'skipped',STARTED:'started',THIRD_QUARTILE:'thirdQuartile',USER_CLOSE:'userClose',VOLUME_CHANGED:'volumeChanged',VOLUME_MUTED:'volumeMuted'}},AdsLoader:function(){this.addEventListener=noopfn;this.contentComplete=noopfn;this.destroy=noopfn;this.getSettings=function(){return{setAutoPlayAdBreaks:noopfn,setLocale:noopfn,setNumRedirects:noopfn,setPlayerType:noopfn,setPlayerVersion:noopfn,setVpaidAllowed:noopfn,setVpaidMode:noopfn}};this.requestAds=noopfn},AdsManagerLoadedEvent:{Type:{ADS_MANAGER_LOADED:'adsManagerLoaded'}},AdsRenderingSettings:function(){},CompanionAdSelectionSettings:function(){},ImaSdkSettings:function(){},OmidAccessMode:{DOMAIN:'domain',FULL:'full',LIMITED:'limited'},OmidVerificationVendor:{GOOGLE:'google',MOAT:'moat',OTHER:'other'},UiElements:{COUNTDOWN:'countdown'},ViewMode:{FULLSCREEN:'fullscreen',NORMAL:'normal'},VERSION:'3.0.0'}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "nobab2.js": {
+    "data": "(function(){var w=window;w.blockAdBlock=w.blockAdBlock||{onDetected:function(){},onNotDetected:function(){},isDetected:function(){return false},on:function(){return this},emitEvent:function(){return this}};w.BlockAdBlock=function(){};w.BlockAdBlock.prototype=w.blockAdBlock})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "fingerprint3.js": {
+    "data": "(function(){function FP(){this.get=function(o){if(typeof o==='function'){o('',[])}else if(o&&typeof o.set==='function'){o.set('',[])}return Promise.resolve({visitorId:'',components:{}})};this.load=function(){return Promise.resolve(new FP())}}var w=window;w.Fingerprint2=w.Fingerprint2||function(){};w.Fingerprint2.prototype={get:function(a,b){if(typeof b==='function'){b('',[])}},x64hash128:function(){return''}};w.FingerprintJS={load:function(){return Promise.resolve(new FP())}};if(typeof w.Fingerprint2==='function'){w.Fingerprint2.get=function(a,b){if(typeof b==='function')b([])}}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "popads.js": {
+    "data": "(function(){window.PopAds=null;window.popns=null;window.pop_params=null;window._pop=null;window.pp=null})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "noeval.js": {
+    "data": "(function(){window.eval=function(){}.bind(window)})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "noeval-silent.js": {
+    "data": "(function(){window.eval=function(){return undefined}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "prebid-ads.js": {
+    "data": "(function(){var noopfn=function(){};window.pbjs=window.pbjs||{};window.pbjs.que=window.pbjs.que||[];window.pbjs.cmd=window.pbjs.cmd||[];window.pbjs.requestBids=noopfn;window.pbjs.setTargetingForGPTAsync=noopfn;window.pbjs.setTargetingForAst=noopfn;window.pbjs.getAdserverTargeting=function(){return{}};window.pbjs.getAdserverTargetingForAdUnitCode=function(){return{}};window.pbjs.getBidResponses=function(){return{}};window.pbjs.getHighestCpmBids=function(){return[]};window.pbjs.adServers={dfp:{buildVideoUrl:noopfn}};window.pbjs.libLoaded=true;window.pbjs.adUnits=[];window.pbjs.aliasBidder=noopfn;window.pbjs.markWinningBidAsUsed=noopfn;window.pbjs.onEvent=noopfn;window.pbjs.offEvent=noopfn;window.pbjs.removeAdUnit=noopfn;window.pbjs.renderAd=noopfn})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "ampproject_v0.js": {
+    "data": "(function(){var noopfn=function(){};window.AMP=window.AMP||[];window.AMP.push=function(a){if(a&&typeof a==='function'){try{a()}catch(e){}}};window.AMP_CONFIG=window.AMP_CONFIG||{}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "hd-main.js": {
+    "data": "(function(){})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "sensors-analytics.js": {
+    "data": "(function(){window.sa=window.sa||{track:function(){},quick:function(){},login:function(){},logout:function(){},registerPage:function(){},setProfile:function(){},init:function(){}}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "amazon_ads.js": {
+    "data": "(function(){var noopfn=function(){};window.amznads=window.amznads||{getAds:noopfn,getAdsCallback:noopfn,getDisplayAds:noopfn,getDisplayAdsCallback:noopfn,getTokens:noopfn,renderAd:noopfn,setTargeting:noopfn,setTargetingForGPTAsync:noopfn,updateCorrelator:noopfn}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "adthrive_abd.js": {
+    "data": "(function(){})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "nitropay_ads.js": {
+    "data": "(function(){window.nitroAds=window.nitroAds||{createAd:function(){return{renderVisibleOnly:function(){},addEventListener:function(){}}},addUserToken:function(){},queue:[]}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "google-analytics_cx_api.js": {
+    "data": "(function(){window.cxApi=window.cxApi||{chooseVariation:function(){return 0},getChosenVariation:function(){return 0},setAllowHash:function(){},setChosenVariation:function(){},setCookiePath:function(){},setDomainName:function(){}}})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  },
+  "google-analytics_inpage_linkid.js": {
+    "data": "(function(){})();",
+    "encoding": "text",
+    "mimeType": "application/javascript"
+  }
+}

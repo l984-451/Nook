@@ -47,6 +47,7 @@ struct NookApp: App {
                     .ignoresSafeArea(.all)
                     .background(BackgroundWindowModifier())
                     .environmentObject(browserManager)
+                    .environmentObject(browserManager.tabManager)
                     .environment(windowRegistry)
                     .environment(webViewCoordinator)
                     .environment(\.nookSettings, settingsManager)
@@ -132,12 +133,23 @@ struct NookApp: App {
         browserManager.aiConfigService = aiConfigService
 
         // Configure managers that depend on settings
-        browserManager.compositorManager.setUnloadTimeout(
-            settingsManager.tabUnloadTimeout
+        browserManager.compositorManager.setMode(
+            settingsManager.tabManagementMode
         )
-        browserManager.trackingProtectionManager.setEnabled(
-            settingsManager.blockCrossSiteTracking
+        browserManager.contentBlockerManager.setEnabled(
+            settingsManager.blockCrossSiteTracking || settingsManager.adBlockerEnabled
         )
+
+        // Apply appearance mode
+        applyAppearanceMode(settingsManager.appearanceMode)
+        NotificationCenter.default.addObserver(
+            forName: .appearanceModeChanged,
+            object: nil,
+            queue: .main
+        ) { [weak settingsManager] _ in
+            guard let settings = settingsManager else { return }
+            applyAppearanceMode(settings.appearanceMode)
+        }
 
         // Initialize keyboard shortcut manager
         keyboardShortcutManager.setBrowserManager(browserManager)
@@ -182,6 +194,19 @@ struct NookApp: App {
     }
 }
 
+// MARK: - Appearance Mode
+
+private func applyAppearanceMode(_ mode: AppearanceMode) {
+    switch mode {
+    case .system:
+        NSApp.appearance = nil  // Follow system
+    case .light:
+        NSApp.appearance = NSAppearance(named: .aqua)
+    case .dark:
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+    }
+}
+
 // MARK: - Window Configuration
 
 /// Configures the window appearance and behavior for Nook browser windows
@@ -219,7 +244,8 @@ struct BackgroundWindowModifier: NSViewRepresentable {
     }
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let window = nsView.window else { return }
-        // Re-apply titlebar hiding on every update to prevent flash during view transitions
+        // Only re-apply if somehow reset (e.g., view transition flash)
+        guard !window.titlebarAppearsTransparent else { return }
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.standardWindowButton(.closeButton)?.isHidden = true

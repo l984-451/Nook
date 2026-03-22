@@ -89,7 +89,7 @@ class NativeMessagingHandler: NSObject {
         }
     }
 
-    func connect(port: WKWebExtension.MessagePort) {
+    func connect(port: WKWebExtension.MessagePort, hostAvailability: ((Bool) -> Void)? = nil) {
         self.port = port
 
         // Use closure-based handlers since delegate is not available
@@ -109,7 +109,14 @@ class NativeMessagingHandler: NSObject {
             guard let self = self else { return }
             if !success {
                 Self.logger.error("[NativeMessaging] Failed to launch host for \(self.applicationId)")
+                DispatchQueue.main.async {
+                    hostAvailability?(false)
+                }
                 port.disconnect()
+            } else {
+                DispatchQueue.main.async {
+                    hostAvailability?(true)
+                }
             }
         }
     }
@@ -149,11 +156,53 @@ class NativeMessagingHandler: NSObject {
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let binaryPath = json["path"] as? String {
 
-                    Self.logger.info("Found manifest at \(path.path)")
+                    Self.logger.info("Found manifest at \(path.path, privacy: .public)")
+
+                    // SECURITY: Validate the binary path before launching
+                    let binaryURL = URL(fileURLWithPath: binaryPath)
+                    let fm = FileManager.default
+
+                    // 1. Verify the binary path exists
+                    guard fm.fileExists(atPath: binaryPath) else {
+                        Self.logger.error("[NativeMessaging] SECURITY: Binary path does not exist: \(binaryPath, privacy: .public)")
+                        continue
+                    }
+
+                    // 2. Resolve symlinks and verify the canonical path matches expected locations
+                    let canonicalURL = binaryURL.resolvingSymlinksInPath()
+                    let canonicalPath = canonicalURL.path
+                    if canonicalPath != binaryPath {
+                        Self.logger.warning("[NativeMessaging] SECURITY: Binary path is a symlink: \(binaryPath, privacy: .public) -> \(canonicalPath, privacy: .public)")
+                    }
+
+                    // 3. Verify the binary is in an expected directory
+                    let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
+                    let allowedPrefixes = [
+                        "\(homeDir)/Library/",
+                        "/Applications/",
+                        "/usr/local/",
+                        "/usr/bin/",
+                        "/opt/",
+                        "/Library/"
+                    ]
+                    let isInExpectedLocation = allowedPrefixes.contains { prefix in
+                        canonicalPath.hasPrefix(prefix)
+                    }
+                    if !isInExpectedLocation {
+                        Self.logger.warning("[NativeMessaging] SECURITY: Binary is in an unusual location: \(canonicalPath, privacy: .public) — proceeding with caution")
+                    }
+
+                    // 4. Verify the binary path doesn't contain path traversal
+                    if binaryPath.contains("..") {
+                        Self.logger.error("[NativeMessaging] SECURITY: Path traversal detected in binary path: \(binaryPath, privacy: .public)")
+                        continue
+                    }
+
+                    Self.logger.info("[NativeMessaging] Launching binary: \(canonicalPath, privacy: .public) (original: \(binaryPath, privacy: .public))")
 
                     // Launch it
                     let process = Process()
-                    process.executableURL = URL(fileURLWithPath: binaryPath)
+                    process.executableURL = canonicalURL
 
                     let input = Pipe()
                     let output = Pipe()

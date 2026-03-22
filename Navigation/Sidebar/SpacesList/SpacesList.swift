@@ -10,6 +10,7 @@ import SwiftUI
 
 struct SpacesList: View {
     @EnvironmentObject var browserManager: BrowserManager
+    @EnvironmentObject var tabManager: TabManager
     @Environment(BrowserWindowState.self) private var windowState
     @State private var availableWidth: CGFloat = 0
     @State private var hoveredSpaceId: UUID?
@@ -19,7 +20,7 @@ struct SpacesList: View {
     private var layoutMode: SpacesListLayoutMode {
         let spaces = windowState.isIncognito
             ? windowState.ephemeralSpaces
-            : browserManager.tabManager.spaces
+            : tabManager.spaces
         return SpacesListLayoutMode.determine(
             spacesCount: spaces.count,
             availableWidth: availableWidth
@@ -30,7 +31,7 @@ struct SpacesList: View {
         if windowState.isIncognito {
             return windowState.ephemeralSpaces
         }
-        return browserManager.tabManager.spaces
+        return tabManager.spaces
     }
 
     var body: some View {

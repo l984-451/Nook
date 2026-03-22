@@ -359,8 +359,6 @@ struct SettingsAITab: View {
                             }
                         }
                     }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
                 }
             }
 
@@ -431,8 +429,6 @@ struct SettingsAITab: View {
                         configService.updateProvider(updated)
                     }
                 ))
-                .toggleStyle(.switch)
-                .controlSize(.small)
 
                 if configService.config.activeProviderId != provider.id {
                     Button("Use") {
@@ -564,8 +560,6 @@ struct SettingsAITab: View {
                         }
                     }
                 ))
-                .toggleStyle(.switch)
-                .controlSize(.small)
 
                 Button(action: { mcpManager.reconnectServer(server) }) {
                     Image(systemName: "arrow.clockwise")

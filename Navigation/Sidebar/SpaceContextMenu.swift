@@ -10,6 +10,7 @@ import SwiftUI
 /// Shared context menu for spaces (used in SpaceTitle and SpacesList)
 struct SpaceContextMenu: View {
     @EnvironmentObject var browserManager: BrowserManager
+    @EnvironmentObject var tabManager: TabManager
 
     let space: Space
     let canDelete: Bool
@@ -29,7 +30,7 @@ struct SpaceContextMenu: View {
                         space.profileId ?? browserManager.profileManager.profiles.first?.id ?? UUID()
                     },
                     set: { newProfileId in
-                        browserManager.tabManager.assign(spaceId: space.id, toProfile: newProfileId)
+                        tabManager.assign(spaceId: space.id, toProfile: newProfileId)
                     }
                 )
             ) {
@@ -99,8 +100,8 @@ struct SpaceContextMenu: View {
 
     private func showDeleteConfirmation() {
         // Count both regular and space-pinned tabs
-        let regularTabsCount = browserManager.tabManager.tabsBySpace[space.id]?.count ?? 0
-        let spacePinnedTabsCount = browserManager.tabManager.spacePinnedTabs(for: space.id).count
+        let regularTabsCount = tabManager.tabsBySpace[space.id]?.count ?? 0
+        let spacePinnedTabsCount = tabManager.spacePinnedTabs(for: space.id).count
         let tabsCount = regularTabsCount + spacePinnedTabsCount
 
         browserManager.dialogManager.showDialog(
@@ -108,7 +109,7 @@ struct SpaceContextMenu: View {
                 spaceName: space.name,
                 spaceIcon: space.icon,
                 tabsCount: tabsCount,
-                isLastSpace: browserManager.tabManager.spaces.count <= 1,
+                isLastSpace: tabManager.spaces.count <= 1,
                 onDelete: {
                     onDeleteSpace()
                     browserManager.dialogManager.closeDialog()

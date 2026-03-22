@@ -44,6 +44,7 @@ extension ExtensionManager {
         else { return }
         let a = adapter(for: tab, browserManager: bm)
         controller.didOpenTab(a)
+        tabCacheGeneration &+= 1
     }
 
     /// Grant all extension contexts explicit access to a URL.
@@ -66,6 +67,7 @@ extension ExtensionManager {
         controller.didActivateTab(newA, previousActiveTab: oldA)
         controller.didSelectTabs([newA])
         if let oldA { controller.didDeselectTabs([oldA]) }
+        tabCacheGeneration &+= 1
     }
 
     @available(macOS 15.4, *)
@@ -75,6 +77,7 @@ extension ExtensionManager {
         let a = adapter(for: tab, browserManager: bm)
         controller.didCloseTab(a, windowIsClosing: false)
         tabAdapters[tab.id] = nil
+        tabCacheGeneration &+= 1
     }
 
     @available(macOS 15.4, *)
@@ -86,6 +89,7 @@ extension ExtensionManager {
         else { return }
         let a = adapter(for: tab, browserManager: bm)
         controller.didChangeTabProperties(properties, for: a)
+        tabCacheGeneration &+= 1
     }
 
     /// Register a UI anchor view for an extension action button to position popovers.

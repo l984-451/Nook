@@ -569,7 +569,33 @@ private class DownloadDelegate: NSObject, WKDownloadDelegate {
 
     func downloadDidFinish(_: WKDownload) {
         print("Download finished: \(download.suggestedFilename)")
+
+        // Set quarantine attribute so Gatekeeper warns about downloaded executables
+        if let destinationURL = download.destinationURL {
+            DownloadDelegate.setQuarantineAttribute(on: destinationURL)
+        }
+
         downloadManager?.updateDownloadState(download.id, state: .completed)
+    }
+
+    /// Sets the `com.apple.quarantine` extended attribute on a downloaded file.
+    ///
+    /// This ensures macOS Gatekeeper will prompt the user before opening
+    /// executables, disk images, or other potentially dangerous files
+    /// downloaded from the web.
+    private static func setQuarantineAttribute(on fileURL: URL) {
+        // com.apple.quarantine format: flags;timestamp_hex;agent_name;uuid
+        // 0083 = "downloaded from the web, not yet opened by the user"
+        let quarantineValue = "0083;\(String(format: "%08x", Int(Date().timeIntervalSince1970)));Nook;\(UUID().uuidString)"
+        guard let data = quarantineValue.data(using: .utf8) else { return }
+
+        fileURL.withUnsafeFileSystemRepresentation { path in
+            guard let path = path else { return }
+            let result = setxattr(path, "com.apple.quarantine", (data as NSData).bytes, data.count, 0, 0)
+            if result != 0 {
+                print("Failed to set quarantine attribute on \(fileURL.lastPathComponent): errno \(errno)")
+            }
+        }
     }
 
     func download(_: WKDownload, didFailWithError error: Error, resumeData _: Data?) {

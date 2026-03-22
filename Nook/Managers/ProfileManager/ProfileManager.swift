@@ -82,7 +82,7 @@ final class ProfileManager: ObservableObject {
         do {
             // Fetch all existing entities
             let all = try context.fetch(FetchDescriptor<ProfileEntity>())
-            var byId: [UUID: ProfileEntity] = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+            var byId: [UUID: ProfileEntity] = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
 
             // Update or insert to match runtime profiles order
             for (index, p) in profiles.enumerated() {

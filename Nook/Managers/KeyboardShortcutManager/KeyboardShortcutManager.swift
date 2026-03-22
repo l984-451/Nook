@@ -181,7 +181,14 @@ class KeyboardShortcutManager {
             print("⌨️ [KSM] Skipping - already forwarding event")
             return false
         }
-        
+
+        // If the key window is not a Nook browser window (e.g. Settings), let the event
+        // pass through so standard macOS shortcuts (Cmd+W to close, etc.) work normally
+        if let keyWindow = NSApp.keyWindow,
+           !(windowRegistry?.windows.values.contains(where: { $0.window === keyWindow }) ?? false) {
+            return false
+        }
+
         let keyCode = event.keyCode
         if keyCode == 36 || keyCode == 76 { // 36 = Return, 76 = Enter (numpad)
             let hasModifiers = event.modifierFlags.contains(.command) ||

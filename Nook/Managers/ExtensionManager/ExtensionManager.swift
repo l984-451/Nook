@@ -37,14 +37,29 @@ final class ExtensionManager: NSObject, ObservableObject,
     var optionsWindows: [String: NSWindow] = [:]
     // Stable adapters for tabs/windows used when notifying controller events
     var tabAdapters: [UUID: ExtensionTabAdapter] = [:]
+    /// Incremented on any tab change; lets ExtensionWindowAdapter cache query results.
+    var tabCacheGeneration: UInt = 0
     internal var windowAdapter: ExtensionWindowAdapter?
     weak var browserManagerRef: BrowserManager?
     // Whether to auto-resize extension action popovers to content. Disabled per UX preference.
     // UI delegate for popup context menus and navigation
     var popupUIDelegate: PopupUIDelegate?
+    // Strong reference to clipboard handler to prevent ARC deallocation
+    var popupClipboardHandler: PopupClipboardHandler?
     // No preference for action popups-as-tabs; keep native popovers per Apple docs
 
     let context: ModelContext
+
+    // Cache of native messaging hosts known to be unavailable (no manifest found).
+    // Prevents repeated manifest lookups and log spam from extensions polling.
+    var unavailableNativeHosts: Set<String> = []
+
+    // Strong references to active native messaging handlers to prevent premature deallocation.
+    var nativeMessagingHandlers: [NativeMessagingHandler] = []
+
+    // Internal native port handlers for Safari extensions that expect the host app
+    // to respond on native messaging channels (keyed by applicationIdentifier).
+    var internalPortHandlers: [String: any InternalNativePortHandler] = [:]
 
     // Profile-aware extension storage
     private var profileExtensionStores: [UUID: WKWebsiteDataStore] = [:]
@@ -59,6 +74,7 @@ final class ExtensionManager: NSObject, ObservableObject,
         if isExtensionSupportAvailable {
             setupExtensionController()
             loadInstalledExtensions()
+            registerInternalNativePortHandlers()
         }
     }
 
@@ -183,6 +199,23 @@ final class ExtensionManager: NSObject, ObservableObject,
         Self.logger.info("Native WKWebExtensionController initialized and configured")
     }
 
+    /// Register internal native port handlers for Safari extensions that expect
+    /// the host app to handle native messaging (e.g. biometric unlock).
+    private func registerInternalNativePortHandlers() {
+        if #available(macOS 15.5, *) {
+            let bitwarden = BitwardenBiometricHandler()
+            for appId in BitwardenBiometricHandler.applicationIdentifiers {
+                internalPortHandlers[appId] = bitwarden
+            }
+            Self.logger.debug("Registered \(self.internalPortHandlers.count) internal native port handlers")
+        }
+    }
+
+    /// Lookup an internal handler for a native messaging application identifier.
+    func internalHandler(for applicationId: String) -> (any InternalNativePortHandler)? {
+        return internalPortHandlers[applicationId]
+    }
+
     /// Verify extension storage is working properly
     private func verifyExtensionStorage(_ profileId: UUID? = nil) {
         guard let controller = extensionController else { return }
@@ -220,10 +253,29 @@ final class ExtensionManager: NSObject, ObservableObject,
 
     func switchProfile(_ profileId: UUID) {
         guard let controller = extensionController else { return }
+        let previousProfileId = currentProfileId
         let store = getExtensionDataStore(for: profileId)
         controller.configuration.defaultWebsiteDataStore = store
         currentProfileId = profileId
-        Self.logger.info("Switched controller data store to profile=\(profileId.uuidString, privacy: .public)")
+
+        // Invalidate any in-memory cached extension data from the previous profile.
+        // Tab adapters may hold stale references to the previous profile's webviews.
+        let cachedAdapterCount = tabAdapters.count
+        tabAdapters.removeAll()
+        Self.logger.info("Cleared \(cachedAdapterCount) cached tab adapters on profile switch")
+
+        Self.logger.info("Switched extension data store from profile=\(previousProfileId?.uuidString ?? "default", privacy: .public) to profile=\(profileId.uuidString, privacy: .public)")
+
+        // Post notification so other subsystems can react to the profile switch
+        NotificationCenter.default.post(
+            name: NSNotification.Name("ExtensionManagerDidSwitchProfile"),
+            object: self,
+            userInfo: [
+                "previousProfileId": previousProfileId as Any,
+                "newProfileId": profileId
+            ]
+        )
+
         // Verify storage on the new profile
         verifyExtensionStorage(profileId)
     }

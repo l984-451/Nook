@@ -27,10 +27,15 @@ class BrowserConfiguration {
         config.defaultWebpagePreferences = preferences
 
         // Core WebKit preferences for extensions
-        config.preferences.javaScriptCanOpenWindowsAutomatically = true
+        config.preferences.javaScriptCanOpenWindowsAutomatically = false
+
+        // Enable JavaScript clipboard access (navigator.clipboard API, document.execCommand('copy'))
+        // Required for third-party WKWebView apps — Safari enables this by default.
+        config.preferences.setValue(true, forKey: "javaScriptCanAccessClipboard")
+        config.preferences.setValue(true, forKey: "DOMPasteAllowed")
 
         // Media settings
-        config.mediaTypesRequiringUserActionForPlayback = []
+        config.mediaTypesRequiringUserActionForPlayback = [.audio]
         
         // Enable Picture-in-Picture for web media
         config.preferences.setValue(true, forKey: "allowsPictureInPictureMediaPlayback")
@@ -58,7 +63,9 @@ class BrowserConfiguration {
         config.applicationNameForUserAgent = "Version/26.0.1 Safari/605.1.15"
 
         // Web inspector will be enabled per-webview using isInspectable property
+        #if DEBUG
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        #endif
 
         // Note: webExtensionController will be set by ExtensionManager during initialization
         // Note: WebAuthn/Passkey support is enabled by default in WKWebView on macOS 13.3+
@@ -66,6 +73,9 @@ class BrowserConfiguration {
 
         return config
     }()
+
+    /// Optional hook for ContentBlockerManager to apply rule lists to new controllers.
+    var contentRuleListApplicator: ((WKUserContentController) -> Void)?
 
     // MARK: - Fresh User Content Controller
     // Creates a fresh WKUserContentController but preserves shared user scripts
@@ -76,6 +86,8 @@ class BrowserConfiguration {
         for script in webViewConfiguration.userContentController.userScripts {
             controller.addUserScript(script)
         }
+        // Apply content blocker rule lists if available
+        contentRuleListApplicator?(controller)
         return controller
     }
 

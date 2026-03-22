@@ -17,6 +17,8 @@ class NookSettingsService {
     private let materialKey = "settings.currentMaterialRaw"
     private let searchEngineKey = "settings.searchEngine"
     private let tabUnloadTimeoutKey = "settings.tabUnloadTimeout"
+    private let tabManagementModeKey = "settings.tabManagementMode"
+    private let startupLoadModeKey = "settings.startupLoadMode"
     private let blockXSTKey = "settings.blockCrossSiteTracking"
     private let adBlockerEnabledKey = "settings.adBlockerEnabled"
     private let adBlockerWhitelistKey = "settings.adBlockerWhitelist"
@@ -89,12 +91,25 @@ class NookSettingsService {
         return SearchProvider.google.queryTemplate
     }
     
-    var tabUnloadTimeout: TimeInterval {
+    var tabManagementMode: TabManagementMode {
         didSet {
-            userDefaults.set(tabUnloadTimeout, forKey: tabUnloadTimeoutKey)
-            // Notify compositor manager of timeout change
-            NotificationCenter.default.post(name: .tabUnloadTimeoutChanged, object: nil, userInfo: ["timeout": tabUnloadTimeout])
+            userDefaults.set(tabManagementMode.rawValue, forKey: tabManagementModeKey)
+            NotificationCenter.default.post(
+                name: .tabManagementModeChanged,
+                object: nil,
+                userInfo: ["mode": tabManagementMode.rawValue]
+            )
         }
+    }
+
+    var startupLoadMode: StartupLoadMode {
+        didSet {
+            userDefaults.set(startupLoadMode.rawValue, forKey: startupLoadModeKey)
+        }
+    }
+
+    var tabUnloadTimeout: TimeInterval {
+        tabManagementMode.unloadTimeout
     }
 
     var blockCrossSiteTracking: Bool {
@@ -130,6 +145,14 @@ class NookSettingsService {
     var adBlockerLastUpdate: Date? {
         didSet {
             userDefaults.set(adBlockerLastUpdate, forKey: adBlockerLastUpdateKey)
+        }
+    }
+
+    var enabledOptionalFilterLists: [String] {
+        didSet {
+            if let data = try? JSONEncoder().encode(enabledOptionalFilterLists) {
+                userDefaults.set(data, forKey: "settings.enabledOptionalFilterLists")
+            }
         }
     }
     
@@ -270,8 +293,7 @@ class NookSettingsService {
         userDefaults.register(defaults: [
             materialKey: NSVisualEffectView.Material.hudWindow.rawValue,
             searchEngineKey: SearchProvider.google.rawValue,
-            // Default tab unload timeout: 60 minutes
-            tabUnloadTimeoutKey: 3600.0,
+            tabManagementModeKey: TabManagementMode.standard.rawValue,
             blockXSTKey: false,
             adBlockerEnabledKey: false,
             debugToggleUpdateNotificationKey: false,
@@ -310,8 +332,27 @@ class NookSettingsService {
             self.customSearchEngines = []
         }
         
-        // Initialize tab unload timeout
-        self.tabUnloadTimeout = userDefaults.double(forKey: tabUnloadTimeoutKey)
+        // Initialize tab management mode (with migration from old timeout)
+        let resolvedMode: TabManagementMode
+        if userDefaults.object(forKey: tabManagementModeKey) == nil,
+           let oldTimeout = userDefaults.object(forKey: tabUnloadTimeoutKey) as? Double {
+            if oldTimeout <= 600 {
+                resolvedMode = .powerSaving
+            } else if oldTimeout <= 3600 {
+                resolvedMode = .standard
+            } else {
+                resolvedMode = .performance
+            }
+            userDefaults.set(resolvedMode.rawValue, forKey: tabManagementModeKey)
+        } else {
+            resolvedMode = TabManagementMode(
+                rawValue: userDefaults.string(forKey: tabManagementModeKey) ?? TabManagementMode.standard.rawValue
+            ) ?? .standard
+        }
+        self.tabManagementMode = resolvedMode
+        self.startupLoadMode = StartupLoadMode(
+            rawValue: userDefaults.string(forKey: startupLoadModeKey) ?? ""
+        ) ?? .favoritesAndSpace
         self.blockCrossSiteTracking = userDefaults.bool(forKey: blockXSTKey)
         self.adBlockerEnabled = userDefaults.bool(forKey: adBlockerEnabledKey)
         if let wlData = userDefaults.data(forKey: adBlockerWhitelistKey),
@@ -327,6 +368,12 @@ class NookSettingsService {
             self.pinnedExtensionIDs = []
         }
         self.adBlockerLastUpdate = userDefaults.object(forKey: adBlockerLastUpdateKey) as? Date
+        if let optData = userDefaults.data(forKey: "settings.enabledOptionalFilterLists"),
+           let optDecoded = try? JSONDecoder().decode([String].self, from: optData) {
+            self.enabledOptionalFilterLists = optDecoded
+        } else {
+            self.enabledOptionalFilterLists = []
+        }
         self.debugToggleUpdateNotification = userDefaults.bool(forKey: debugToggleUpdateNotificationKey)
         self.askBeforeQuit = userDefaults.bool(forKey: askBeforeQuitKey)
         self.sidebarPosition = SidebarPosition(rawValue: userDefaults.string(forKey: sidebarPositionKey) ?? "left") ?? SidebarPosition.left
@@ -467,7 +514,7 @@ public enum OpenRouterModel: String, CaseIterable, Identifiable {
 
 // MARK: - Notification Names
 extension Notification.Name {
-    static let tabUnloadTimeoutChanged = Notification.Name("tabUnloadTimeoutChanged")
+    static let tabManagementModeChanged = Notification.Name("tabManagementModeChanged")
     static let blockCrossSiteTrackingChanged = Notification.Name("blockCrossSiteTrackingChanged")
     static let appearanceModeChanged = Notification.Name("appearanceModeChanged")
     static let adBlockerEnabledChanged = Notification.Name("adBlockerEnabledChanged")
@@ -552,6 +599,109 @@ public enum TabLayout: String, CaseIterable, Identifiable {
         switch self {
         case .sidebar: return "Sidebar"
         case .topOfWindow: return "Top of Window"
+        }
+    }
+}
+
+// MARK: - Tab Management Mode
+
+public enum TabManagementMode: String, CaseIterable, Identifiable {
+    case powerSaving
+    case standard
+    case performance
+
+    public var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .powerSaving: return "Power Saving"
+        case .standard: return "Standard"
+        case .performance: return "Performance"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .powerSaving: return "Aggressively unloads tabs to minimize memory and battery usage. Best for laptops on battery."
+        case .standard: return "Balanced tab management for everyday browsing."
+        case .performance: return "Keeps tabs loaded longer for power users with many tabs open."
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .powerSaving: return "leaf.fill"
+        case .standard: return "speedometer"
+        case .performance: return "bolt.fill"
+        }
+    }
+
+    var unloadTimeout: TimeInterval {
+        switch self {
+        case .powerSaving: return 300       // 5 minutes
+        case .standard: return 1800         // 30 minutes
+        case .performance: return 14400     // 4 hours
+        }
+    }
+
+    var maxLoadedTabs: Int? {
+        switch self {
+        case .powerSaving: return 8
+        case .standard: return nil
+        case .performance: return nil
+        }
+    }
+
+    var unloadsOnBackground: Bool {
+        switch self {
+        case .powerSaving: return true
+        case .standard: return false
+        case .performance: return false
+        }
+    }
+
+    /// Number of tabs to keep loaded (in addition to current) under memory pressure.
+    /// nil means use fraction-based approach instead.
+    var memoryPressureKeepCount: Int? {
+        switch self {
+        case .powerSaving: return 2
+        case .standard: return nil
+        case .performance: return nil
+        }
+    }
+
+    /// Fraction of loaded tabs to unload under memory pressure (used when keepCount is nil).
+    var memoryPressureUnloadFraction: Double {
+        switch self {
+        case .powerSaving: return 1.0  // Not used — keepCount takes precedence for powerSaving
+        case .standard: return 0.5
+        case .performance: return 0.25
+        }
+    }
+}
+
+// MARK: - Startup Load Mode
+
+public enum StartupLoadMode: String, CaseIterable, Identifiable {
+    case nothing
+    case favorites
+    case favoritesAndSpace
+
+    public var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .nothing: return "Load Nothing"
+        case .favorites: return "Load Favorites"
+        case .favoritesAndSpace: return "Load Favorites & Space"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .nothing: return "All tabs start asleep. Fastest startup, lowest memory."
+        case .favorites: return "Only favorites are loaded on start. Space tabs load when selected."
+        case .favoritesAndSpace: return "Favorites and current space tabs are loaded on start."
         }
     }
 }

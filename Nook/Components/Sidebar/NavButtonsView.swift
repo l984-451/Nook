@@ -6,13 +6,16 @@
 //
 import SwiftUI
 
-// Wrapper to properly observe Tab object and use active window's WebView
+// Wrapper to properly observe Tab object and use active window's WebView.
+// Uses KVO on WKWebView.canGoBack/canGoForward instead of a 1-second polling timer.
 @MainActor
 class ObservableTabWrapper: ObservableObject {
     @Published var tab: Tab?
     weak var browserManager: BrowserManager?
     weak var windowState: BrowserWindowState?
-    
+    private var canGoBackObservation: NSKeyValueObservation?
+    private var canGoForwardObservation: NSKeyValueObservation?
+
     var canGoBack: Bool {
         if let tab = tab,
            let browserManager = browserManager,
@@ -22,7 +25,7 @@ class ObservableTabWrapper: ObservableObject {
         }
         return tab?.canGoBack ?? false
     }
-    
+
     var canGoForward: Bool {
         if let tab = tab,
            let browserManager = browserManager,
@@ -32,14 +35,35 @@ class ObservableTabWrapper: ObservableObject {
         }
         return tab?.canGoForward ?? false
     }
-    
+
     func updateTab(_ newTab: Tab?) {
         tab = newTab
+        observeWebView()
     }
-    
+
     func setContext(browserManager: BrowserManager, windowState: BrowserWindowState) {
         self.browserManager = browserManager
         self.windowState = windowState
+        observeWebView()
+    }
+
+    private func observeWebView() {
+        // Remove old observations
+        canGoBackObservation = nil
+        canGoForwardObservation = nil
+
+        guard let tab = tab,
+              let browserManager = browserManager,
+              let windowState = windowState,
+              let webView = browserManager.getWebView(for: tab.id, in: windowState.id)
+        else { return }
+
+        canGoBackObservation = webView.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in self?.objectWillChange.send() }
+        }
+        canGoForwardObservation = webView.observe(\.canGoForward, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in self?.objectWillChange.send() }
+        }
     }
 }
 
@@ -133,11 +157,19 @@ struct NavButtonsView: View {
                 }
                 
                 if !shouldCollapseRefresh {
-                    Button("Reload", systemImage: "arrow.clockwise", action: refreshCurrentTab)
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(NavButtonStyle())
-                        .foregroundStyle(Color.primary)
-                        .foregroundStyle(Color.primary)
+                    Button {
+                        if tabWrapper.tab?.isLoading == true {
+                            tabWrapper.tab?.stop()
+                        } else {
+                            refreshCurrentTab()
+                        }
+                    } label: {
+                        Image(systemName: tabWrapper.tab?.isLoading == true ? "xmark" : "arrow.clockwise")
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(NavButtonStyle())
+                    .foregroundStyle(Color.primary)
                 }
                 
                 if !sidebarOnLeft {
@@ -159,9 +191,6 @@ struct NavButtonsView: View {
             updateCurrentTab()
         }
         .onChange(of: browserManager.currentTab(for: windowState)?.id) { _, _ in
-            updateCurrentTab()
-        }
-        .onReceive(Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()) { _ in
             updateCurrentTab()
         }
     }

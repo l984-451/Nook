@@ -17,7 +17,7 @@ All extension code requires `@available(macOS 15.4, *)` guards. Content script i
 | `ExtensionManager+Diagnostics.swift` | Background health probes, state diagnosis, popup diagnostics, testing helpers |
 | `ExtensionManager+TabNotifications.swift` | Tab adapter management, tab lifecycle notifications, action anchor tracking |
 | `NativeMessagingHandler.swift` | Standalone class: launches native host processes, stdin/stdout messaging protocol |
-| `PopupUIDelegate.swift` | Standalone class: WKUIDelegate/WKNavigationDelegate for extension popup webviews |
+| `PopupUIDelegate.swift` | `PopupClipboardHandler` (JS↔native clipboard bridge via WKScriptMessageHandler) + `PopupUIDelegate` (WKUIDelegate for popup webviews) |
 | `ExtensionBridge.swift` | `WKWebExtensionTab` / `WKWebExtensionWindow` protocol adapters |
 | `Nook/Models/Extension/ExtensionModels.swift` | `ExtensionEntity` (SwiftData) + `InstalledExtension` runtime model |
 | `Nook/Models/BrowserConfig/BrowserConfig.swift` | Shared `WKWebViewConfiguration` factory — extension controller lives here |
@@ -99,13 +99,41 @@ Looks up host manifests in order:
 
 Protocol: 4-byte native-endian length prefix + JSON. Supports single-shot (5s timeout) and long-lived `MessagePort` connections.
 
+**Critical: Delegate method signatures** — The `WKWebExtensionControllerDelegate` native messaging methods have specific Swift names defined by `NS_SWIFT_NAME`. The parameter labels MUST match exactly:
+```swift
+// CORRECT — matches NS_SWIFT_NAME(webExtensionController(_:sendMessage:toApplicationWithIdentifier:for:replyHandler:))
+func webExtensionController(_:, sendMessage:, toApplicationWithIdentifier applicationId: String?, for:, replyHandler:)
+
+// WRONG — generates wrong ObjC selector, WebKit can't find it
+func webExtensionController(_:, sendMessage:, to applicationId: String, for:, replyHandler:)
+```
+Similarly, `connectUsing` must use the completion handler form (not `async throws`) and the port type is `WKWebExtension.MessagePort` (Swift name for `WKWebExtensionMessagePort`).
+
+**Unavailable host caching** — Extensions like Bitwarden poll `sendNativeMessage` every ~500ms. Failed host lookups are cached in `unavailableNativeHosts` and return `(["command": "disconnected"], nil)` immediately. Returning a non-nil reply with nil error prevents WebKit from logging "Runtime error" spam.
+
+**Safari extension commands** — Safari `.appex` extensions send app-specific commands via native messaging instead of using web APIs. Common commands intercepted before the host lookup:
+- `copyToClipboard` — writes `msg["text"]` to `NSPasteboard.general`
+- `readFromClipboard` — reads from `NSPasteboard.general`
+- `showPopover` — routes to `extensionContext.performAction(for:)`
+
 ## Delegate Methods (WKWebExtensionControllerDelegate)
 
 Key delegate implementations in ExtensionManager:
-- **Action popup**: Grants permissions, wakes MV3 service worker, positions popover via registered anchor views
+- **Action popup**: Grants permissions, wakes MV3 service worker, positions popover via registered anchor views. Popup webview gets a JS clipboard polyfill via `PopupClipboardHandler` for extensions using web Clipboard APIs.
+- **Native messaging**: Intercepts Safari-specific commands (`copyToClipboard`, `readFromClipboard`, `showPopover`) before forwarding to `NativeMessagingHandler`. Caches unavailable hosts.
 - **Open tab/window**: Creates tabs for extension pages, handles OAuth popup flows
 - **Options page**: Resolves URL from manifest (`options_ui.page` / `options_page`), opens in separate NSWindow with extension's webViewConfiguration. Includes path traversal protection.
 - **Permission prompts**: `promptForPermissions()` and `promptForPermissionToAccess()` for runtime permission requests
+
+## Clipboard in Extension Popups
+
+WebContent processes are sandboxed and **cannot access the system pasteboard** (`CFPasteboardRef` fails with "Sandbox restriction"). This affects all clipboard operations in extension popups. Two complementary solutions:
+
+1. **Native messaging interception** (`ExtensionManager+Delegate.swift`) — Safari-style extensions (e.g., Bitwarden) send clipboard commands via `browser.runtime.sendNativeMessage()`. The delegate intercepts `copyToClipboard`/`readFromClipboard` and writes to `NSPasteboard` from the app process.
+
+2. **JS clipboard polyfill** (`PopupUIDelegate.swift`) — For extensions using web APIs (`navigator.clipboard.writeText`, `document.execCommand('copy')`). A `WKScriptMessageHandler` bridge routes clipboard writes through the app process.
+
+**Key WKWebView gotcha**: `webView.configuration` returns a **copy** each time. Setting `preferences.setValue(...)` on it modifies a temporary. However, `userContentController` IS a shared reference — adding script message handlers through it works.
 
 ## Diagnostics
 

@@ -8,6 +8,7 @@
 import AppKit
 import Foundation
 import os
+import SwiftData
 import SwiftUI
 import WebKit
 
@@ -82,6 +83,11 @@ extension ExtensionManager {
             self.popupUIDelegate = delegate
             webView.uiDelegate = delegate
 
+            // Install clipboard bridge for extension popups (e.g. Bitwarden copy button).
+            // WebKit's Clipboard API is restricted in third-party WKWebView apps, so we
+            // polyfill navigator.clipboard.writeText() via a native message handler.
+            PopupClipboardHandler.install(on: webView, retainedBy: self)
+
             Self.logger.debug("Popup webView: URL=\(webView.url?.absoluteString ?? "nil", privacy: .public), isLoading=\(webView.isLoading)")
 
             // The popup webview is created by WKWebExtension with a URL set but not
@@ -94,12 +100,22 @@ extension ExtensionManager {
         }
 
         // Present the popover on main thread
+        let popupWebView = action.popupWebView
         DispatchQueue.main.async {
             let targetWindow = NSApp.keyWindow ?? NSApp.mainWindow
 
             popover.behavior = .transient
             popover.delegate = self
             self.isPopupActive = true
+
+            // After showing the popover, make the popup webview first responder
+            // so Cmd+C and other keyboard shortcuts are routed to it.
+            let focusPopupWebView = {
+                if let webView = popupWebView,
+                   let popoverWindow = webView.window {
+                    popoverWindow.makeFirstResponder(webView)
+                }
+            }
 
             // Keep popover size fixed; no autosizing bookkeeping
 
@@ -127,6 +143,7 @@ extension ExtensionManager {
                         of: view,
                         preferredEdge: .maxY
                     )
+                    focusPopupWebView()
                     completionHandler(nil)
                     return
                 }
@@ -140,6 +157,7 @@ extension ExtensionManager {
                         of: view,
                         preferredEdge: .maxY
                     )
+                    focusPopupWebView()
                     completionHandler(nil)
                     return
                 }
@@ -160,6 +178,7 @@ extension ExtensionManager {
                     of: contentView,
                     preferredEdge: .minY
                 )
+                focusPopupWebView()
                 completionHandler(nil)
                 return
             }
@@ -213,6 +232,7 @@ extension ExtensionManager {
         requestedMatches: Set<WKWebExtension.MatchPattern>,
         optionalMatches: Set<WKWebExtension.MatchPattern>,
         extensionDisplayName: String,
+        isRuntimeRequest: Bool = false,
         onDecision:
             @escaping (
                 _ grantedPermissions: Set<WKWebExtension.Permission>,
@@ -246,6 +266,7 @@ extension ExtensionManager {
                         optionalPermissions: optPerms,
                         requestedHostPermissions: reqHosts,
                         optionalHostPermissions: optHosts,
+                        isRuntimeRequest: isRuntimeRequest,
                         onGrant: {
                             let allPerms = requestedPermissions.union(
                                 optionalPermissions
@@ -282,36 +303,24 @@ extension ExtensionManager {
             extensionContext.webExtension.displayName ?? "Extension"
         presentPermissionPrompt(
             requestedPermissions: permissions,
-            optionalPermissions: extensionContext.webExtension
-                .optionalPermissions,
-            requestedMatches: extensionContext.webExtension
-                .requestedPermissionMatchPatterns,
-            optionalMatches: extensionContext.webExtension
-                .optionalPermissionMatchPatterns,
+            optionalPermissions: [],
+            requestedMatches: [],
+            optionalMatches: [],
             extensionDisplayName: displayName,
-            onDecision: { grantedPerms, grantedMatches in
-                for p in permissions.union(
-                    extensionContext.webExtension.optionalPermissions
-                ) {
+            isRuntimeRequest: true,
+            onDecision: { [weak self] grantedPerms, _ in
+                for p in permissions {
                     extensionContext.setPermissionStatus(
                         grantedPerms.contains(p)
                             ? .grantedExplicitly : .deniedExplicitly,
                         for: p
                     )
                 }
-                for m in extensionContext.webExtension
-                    .requestedPermissionMatchPatterns.union(
-                        extensionContext.webExtension
-                            .optionalPermissionMatchPatterns
-                    )
-                {
-                    extensionContext.setPermissionStatus(
-                        grantedMatches.contains(m)
-                            ? .grantedExplicitly : .deniedExplicitly,
-                        for: m
-                    )
-                }
                 completionHandler(grantedPerms, nil)
+                self?.persistGrantedOptionalPermissions(
+                    for: extensionContext,
+                    permissions: grantedPerms
+                )
             },
             onCancel: {
                 for p in permissions {
@@ -320,20 +329,38 @@ extension ExtensionManager {
                         for: p
                     )
                 }
-                for m in extensionContext.webExtension
-                    .requestedPermissionMatchPatterns
-                {
-                    extensionContext.setPermissionStatus(
-                        .deniedExplicitly,
-                        for: m
-                    )
-                }
                 completionHandler([], nil)
             },
             extensionLogo: extensionContext.webExtension.icon(
                 for: .init(width: 64, height: 64)
             ) ?? NSImage()
         )
+    }
+
+    // MARK: - Persist runtime-granted optional permissions
+
+    /// Save granted optional permissions to the ExtensionEntity so they survive app restarts.
+    private func persistGrantedOptionalPermissions(
+        for extensionContext: WKWebExtensionContext,
+        permissions: Set<WKWebExtension.Permission> = [],
+        matchPatterns: Set<WKWebExtension.MatchPattern> = []
+    ) {
+        let extensionId = extensionContext.uniqueIdentifier
+        let predicate = #Predicate<ExtensionEntity> { $0.id == extensionId }
+        guard let entity = try? context.fetch(
+            FetchDescriptor<ExtensionEntity>(predicate: predicate)
+        ).first else { return }
+
+        // Merge new grants with existing ones
+        let newPerms = permissions.map { String(describing: $0) }
+        let existingPerms = Set(entity.grantedOptionalPermissions ?? [])
+        entity.grantedOptionalPermissions = Array(existingPerms.union(newPerms))
+
+        let newMatches = matchPatterns.map { String(describing: $0) }
+        let existingMatches = Set(entity.grantedOptionalMatchPatterns ?? [])
+        entity.grantedOptionalMatchPatterns = Array(existingMatches.union(newMatches))
+
+        try? context.save()
     }
 
     // Note: We can provide implementations for opening new tabs/windows once the
@@ -499,27 +526,81 @@ extension ExtensionManager {
     func webExtensionController(
         _ controller: WKWebExtensionController,
         sendMessage message: Any,
-        to applicationId: String,
+        toApplicationWithIdentifier applicationId: String?,
         for extensionContext: WKWebExtensionContext,
         replyHandler: @escaping (Any?, (any Error)?) -> Void
     ) {
-        // Intercept Bitwarden's "showPopover" native message. When isSafariApi=true and
-        // chrome.browserAction.openPopup() is unavailable, Bitwarden sends this message to
-        // "com.bitwarden.desktop" to open its action popup. Route it to performAction instead.
+        // Intercept Safari-specific native messages that we can handle natively.
+        // Bitwarden's Safari extension sends commands via native messaging instead of
+        // using web clipboard APIs.
         if let msg = message as? [String: Any],
-           let command = msg["command"] as? String,
-           command == "showPopover" {
-            Self.logger.info("[NativeMessaging] Intercepting showPopover for '\(extensionContext.webExtension.displayName ?? "?", privacy: .public)'")
-            let tab = browserManagerRef?.currentTabForActiveWindow()
-            let adapter: ExtensionTabAdapter? = tab.flatMap { stableAdapter(for: $0) }
-            extensionContext.performAction(for: adapter)
-            replyHandler(["success": true], nil)
+           let command = msg["command"] as? String {
+
+            switch command {
+            case "showPopover":
+                // When isSafariApi=true and chrome.browserAction.openPopup() is unavailable,
+                // Bitwarden sends this to open its action popup.
+                Self.logger.info("[NativeMessaging] Intercepting showPopover for '\(extensionContext.webExtension.displayName ?? "?", privacy: .public)'")
+                let tab = browserManagerRef?.currentTabForActiveWindow()
+                let adapter: ExtensionTabAdapter? = tab.flatMap { stableAdapter(for: $0) }
+                extensionContext.performAction(for: adapter)
+                replyHandler(["success": true], nil)
+                return
+
+            case "copyToClipboard":
+                // Bitwarden Safari sends clipboard writes via native messaging.
+                // Handle it by writing directly to NSPasteboard.
+                let text = msg["text"] as? String ?? msg["data"] as? String ?? ""
+                if !text.isEmpty {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+                replyHandler(["success": true], nil)
+                return
+
+            case "readFromClipboard":
+                // Bitwarden may also request clipboard reads via native messaging.
+                let text = NSPasteboard.general.string(forType: .string) ?? ""
+                replyHandler(["text": text], nil)
+                return
+
+            case "sleep":
+                // Bitwarden Safari uses "sleep" as a long-poll for vault timeout detection.
+                // The native host should block until a lock event, then respond.
+                // We respond after a delay to prevent a tight polling loop.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                    replyHandler(["command": "awake"] as [String: Any], nil)
+                }
+                return
+
+            default:
+                break
+            }
+        }
+
+        guard let applicationId else {
+            replyHandler(nil, NSError(domain: "NativeMessaging", code: 1, userInfo: [NSLocalizedDescriptionKey: "No application identifier"]))
             return
         }
 
+        // Fast-path: if we already know this host is unavailable, return immediately
+        // without launching a process or logging. Extensions like Bitwarden poll every
+        // 500ms. Return a valid reply (not an error) so WebKit doesn't log a runtime error.
+        if unavailableNativeHosts.contains(applicationId) {
+            replyHandler(["command": "disconnected"] as [String: Any], nil)
+            return
+        }
+
+        Self.logger.info("[NativeMessaging] sendMessage to '\(applicationId, privacy: .public)'")
+
         // Single-shot message handling
         let handler = NativeMessagingHandler(applicationId: applicationId)
-        handler.sendMessage(message) { response, error in
+        handler.sendMessage(message) { [weak self] response, error in
+            // If the host failed to launch, cache it as unavailable
+            if error != nil && response == nil {
+                self?.unavailableNativeHosts.insert(applicationId)
+                Self.logger.info("[NativeMessaging] Marked '\(applicationId, privacy: .public)' as unavailable (host not found)")
+            }
             replyHandler(response, error)
         }
     }
@@ -528,22 +609,111 @@ extension ExtensionManager {
     func webExtensionController(
         _ controller: WKWebExtensionController,
         connectUsing port: WKWebExtension.MessagePort,
-        for extensionContext: WKWebExtensionContext
-    ) async throws {
+        for extensionContext: WKWebExtensionContext,
+        completionHandler: @escaping ((any Error)?) -> Void
+    ) {
         guard let applicationId = port.applicationIdentifier else {
             Self.logger.error("[NativeMessaging] Port connection missing application identifier")
+            completionHandler(NSError(domain: "NativeMessaging", code: 1, userInfo: [NSLocalizedDescriptionKey: "No application identifier"]))
             return
         }
 
+        // Fast-path: if we already know this host is unavailable, handle the port
+        // internally. Safari extensions (e.g. Bitwarden .appex) call connectNative()
+        // expecting the HOST APP to respond — not an external process. If we disconnect
+        // the port, the extension retries immediately creating a CPU-burning loop.
+        // Instead, keep the port alive and handle known commands (clipboard, popover).
+        if unavailableNativeHosts.contains(applicationId) {
+            Self.logger.debug("[NativeMessaging] Handling port internally for '\(applicationId, privacy: .public)' (no external host)")
+            setupInternalPortHandler(port: port, extensionContext: extensionContext, applicationId: applicationId)
+            completionHandler(nil)
+            return
+        }
 
         let handler = NativeMessagingHandler(applicationId: applicationId)
-        handler.connect(port: port)
-
-        // Keep a strong reference to the handler if needed, but usually the port delegate handles lifecycle
-        // For now, we rely on the port retaining the delegate or the handler retaining itself via the port relationship
-        // (Note: In a production app, we might need to manage these references in a set)
+        nativeMessagingHandlers.append(handler)
+        handler.connect(port: port) { [weak self] hostFound in
+            guard let self else { return }
+            if !hostFound {
+                self.unavailableNativeHosts.insert(applicationId)
+                Self.logger.info("[NativeMessaging] Marked '\(applicationId, privacy: .public)' as unavailable (host not found via port)")
+                // External host not available — fall back to internal handling
+                // so the port stays alive and Safari extension commands still work
+                self.setupInternalPortHandler(port: port, extensionContext: extensionContext, applicationId: applicationId)
+            }
+            // Clean up handler reference
+            self.nativeMessagingHandlers.removeAll { $0 === handler }
+        }
+        completionHandler(nil)
     }
 
+    // MARK: - Internal Port Handler for Safari Extensions
+
+    /// Handle a native messaging port internally when no external host is available.
+    /// Safari extensions (.appex) expect their host app to respond on this channel.
+    ///
+    /// Routes messages through registered `InternalNativePortHandler` instances first
+    /// (e.g. Bitwarden biometric handler), then falls back to generic command handling
+    /// (clipboard, popover) that's common across many Safari extensions.
+    @available(macOS 15.5, *)
+    private func setupInternalPortHandler(
+        port: WKWebExtension.MessagePort,
+        extensionContext: WKWebExtensionContext,
+        applicationId: String? = nil
+    ) {
+        // Resolve a registered handler for this application identifier
+        let registeredHandler: (any InternalNativePortHandler)? =
+            applicationId.flatMap { internalHandler(for: $0) }
+
+        port.messageHandler = { [weak self] (_, message) in
+            MainActor.assumeIsolated {
+                guard let msg = message as? [String: Any] else {
+                    // Unknown message format — ack to keep port alive
+                    port.sendMessage(["command": "unknownCommand"] as [String: Any]) { _ in }
+                    return
+                }
+
+                // Try the registered extension-specific handler first
+                if let registeredHandler, registeredHandler.handleMessage(msg, port: port) {
+                    return
+                }
+
+                // Fall through to generic Safari extension commands
+                guard let command = msg["command"] as? String else {
+                    port.sendMessage(["command": "unknownCommand"] as [String: Any]) { _ in }
+                    return
+                }
+
+                switch command {
+                case "copyToClipboard":
+                    let text = msg["text"] as? String ?? msg["data"] as? String ?? ""
+                    if !text.isEmpty {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
+                    }
+                    port.sendMessage(["command": command, "success": true] as [String: Any]) { _ in }
+
+                case "readFromClipboard":
+                    let text = NSPasteboard.general.string(forType: .string) ?? ""
+                    port.sendMessage(["command": command, "text": text] as [String: Any]) { _ in }
+
+                case "showPopover":
+                    let tab = self?.browserManagerRef?.currentTabForActiveWindow()
+                    let adapter: ExtensionTabAdapter? = tab.flatMap { self?.stableAdapter(for: $0) }
+                    extensionContext.performAction(for: adapter)
+                    port.sendMessage(["command": command, "success": true] as [String: Any]) { _ in }
+
+                default:
+                    Self.logger.debug("[NativeMessaging] Unhandled port command: \(command, privacy: .public)")
+                    port.sendMessage(["command": command, "response": "not supported"] as [String: Any]) { _ in }
+                }
+            }
+        }
+
+        port.disconnectHandler = { _ in
+            Self.logger.debug("[NativeMessaging] Internal port handler disconnected")
+        }
+    }
 
     // Open the extension's options page (inside a browser tab)
     @available(macOS 15.5, *)
@@ -649,15 +819,13 @@ extension ExtensionManager {
                 isDirectory: true
             )
 
-            // SECURITY FIX: Normalize paths to prevent path traversal attacks
-            let normalizedExtensionRoot = extensionRoot.standardizedFileURL
-            let normalizedOptionsURL = optionsURL.standardizedFileURL
+            // SECURITY FIX: Normalize paths and resolve symlinks to prevent path traversal attacks
+            let canonicalRoot = extensionRoot.resolvingSymlinksInPath().standardized.path
+            let canonicalOptions = optionsURL.resolvingSymlinksInPath().standardized.path
 
-            // Check if options URL is within the extension directory (prevent path traversal)
-            if !normalizedOptionsURL.path.hasPrefix(
-                normalizedExtensionRoot.path
-            ) {
-                Self.logger.debug("   Extension root: \(normalizedExtensionRoot.path)")
+            // Check if options URL is within the extension directory (prevent path traversal via symlinks)
+            if !canonicalOptions.hasPrefix(canonicalRoot) {
+                Self.logger.error("SECURITY: Options URL outside extension directory: \(canonicalOptions, privacy: .public) not in \(canonicalRoot, privacy: .public)")
                 completionHandler(
                     NSError(
                         domain: "ExtensionManager",
@@ -673,9 +841,7 @@ extension ExtensionManager {
 
             // SECURITY FIX: Additional validation - ensure no path traversal attempts
             let relativePath = String(
-                normalizedOptionsURL.path.dropFirst(
-                    normalizedExtensionRoot.path.count
-                )
+                canonicalOptions.dropFirst(canonicalRoot.count)
             )
             if relativePath.contains("..") || relativePath.hasPrefix("/") {
                 Self.logger.error("SECURITY: Path traversal attempt detected: \(relativePath)")
@@ -818,7 +984,8 @@ extension ExtensionManager {
             requestedMatches: matchPatterns,
             optionalMatches: [],
             extensionDisplayName: displayName,
-            onDecision: { _, grantedMatches in
+            isRuntimeRequest: true,
+            onDecision: { [weak self] _, grantedMatches in
                 for m in matchPatterns {
                     extensionContext.setPermissionStatus(
                         grantedMatches.contains(m)
@@ -827,6 +994,10 @@ extension ExtensionManager {
                     )
                 }
                 completionHandler(grantedMatches, nil)
+                self?.persistGrantedOptionalPermissions(
+                    for: extensionContext,
+                    matchPatterns: grantedMatches
+                )
             },
             onCancel: {
                 for m in matchPatterns {
@@ -895,6 +1066,7 @@ extension ExtensionManager {
                         optionalPermissions: [],
                         requestedHostPermissions: urlStrings,
                         optionalHostPermissions: [],
+                        isRuntimeRequest: true,
                         onGrant: {
                             bm.closeDialog()
                             completionHandler(urls, nil)

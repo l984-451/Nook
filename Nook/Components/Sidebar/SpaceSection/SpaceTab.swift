@@ -17,6 +17,7 @@ struct SpaceTab: View {
     @State private var isSpeakerHovering: Bool = false
     @FocusState private var isTextFieldFocused: Bool
     @EnvironmentObject var browserManager: BrowserManager
+    @EnvironmentObject var tabManager: TabManager
     @Environment(BrowserWindowState.self) private var windowState
     @Environment(\.colorScheme) var colorScheme
 
@@ -43,11 +44,9 @@ struct SpaceTab: View {
                         .opacity(tab.isUnloaded ? 0.5 : 1.0)
                     
                     if tab.isUnloaded {
-                        Image(systemName: "arrow.down.circle.fill")
-                            .font(.system(size: 8))
+                        Image(systemName: "moon.fill")
+                            .font(.system(size: 10))
                             .foregroundColor(.secondary)
-                            .background(Color.gray)
-                            .clipShape(Circle())
                             .offset(x: 6, y: -6)
                     }
                 }
@@ -166,7 +165,7 @@ struct SpaceTab: View {
     @ViewBuilder
     private var addToMenuSection: some View {
         let spaceId = tab.spaceId ?? UUID()
-        let folders = browserManager.tabManager.folders(for: spaceId)
+        let folders = tabManager.folders(for: spaceId)
 
         Menu {
             ForEach(folders, id: \.id) { folder in
@@ -182,7 +181,7 @@ struct SpaceTab: View {
 
         if !tab.isPinned && !tab.isSpacePinned {
             Button {
-                browserManager.tabManager.pinTab(tab)
+                tabManager.pinTab(tab)
             } label: {
                 Label("Add to Favorites", systemImage: "star.fill")
             }
@@ -250,11 +249,11 @@ struct SpaceTab: View {
 
     @ViewBuilder
     private var moveToSpaceMenu: some View {
-        let spaces = browserManager.tabManager.spaces
+        let spaces = tabManager.spaces
         Menu {
             ForEach(spaces, id: \.id) { space in
                 Button {
-                    browserManager.tabManager.moveTab(tab.id, to: space.id)
+                    tabManager.moveTab(tab.id, to: space.id)
                 } label: {
                     spaceLabel(for: space)
                 }
@@ -282,7 +281,7 @@ struct SpaceTab: View {
     private var closeMenuSection: some View {
         if !tab.isPinned && !tab.isSpacePinned && tab.spaceId != nil {
             Button {
-                browserManager.tabManager.closeAllTabsBelow(tab)
+                tabManager.closeAllTabsBelow(tab)
             } label: {
                 Label("Close All Below", systemImage: "arrow.down.to.line")
             }

@@ -10,6 +10,7 @@ import AppKit
 
 struct PeekOverlayView: View {
     @EnvironmentObject var browserManager: BrowserManager
+    @EnvironmentObject var tabManager: TabManager
     @Environment(BrowserWindowState.self) private var windowState
     @Environment(\.colorScheme) var colorScheme
     @Environment(\.nookSettings) var nookSettings
@@ -31,7 +32,7 @@ struct PeekOverlayView: View {
 
     private var currentSpaceColor: Color {
         if let spaceId = windowState.currentSpaceId,
-           let space = browserManager.tabManager.spaces.first(where: { $0.id == spaceId }) {
+           let space = tabManager.spaces.first(where: { $0.id == spaceId }) {
             return space.gradient.primaryColor
         }
         return Color.accentColor // fallback

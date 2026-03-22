@@ -12,6 +12,7 @@ struct StageFooter: View {
     var isLoading: Bool = false
     var onContinue: () -> Void
     var onBack: () -> Void
+    var onSkip: (() -> Void)? = nil
 
     var secondaryText: String {
         switch currentStage {
@@ -65,7 +66,7 @@ struct StageFooter: View {
             .disabled(isLoading)
             if !(currentStage == 0) {
                 Button {
-                    if currentStage > 0 { onBack() }
+                    if currentStage == 1, let onSkip { onSkip() } else { onBack() }
                 } label: {
                     Text(secondaryText)
                         .font(.system(size: 14, weight: .semibold))

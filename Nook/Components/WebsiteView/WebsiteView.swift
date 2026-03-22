@@ -199,6 +199,9 @@ struct WebsiteView: View {
     }
 
     var body: some View {
+        // Read observable properties directly so SwiftUI tracks changes
+        let _ = windowState.currentTabId
+        let _ = windowState.compositorVersion
         ZStack() {
             Group {
                 if browserManager.currentTab(for: windowState) != nil {
@@ -211,7 +214,9 @@ struct WebsiteView: View {
                             isSplit: splitManager.isSplit(for: windowState.id),
                             leftId: splitManager.leftTabId(for: windowState.id),
                             rightId: splitManager.rightTabId(for: windowState.id),
-                            windowState: windowState
+                            windowState: windowState,
+                            compositorVersion: windowState.compositorVersion,
+                            currentTabId: windowState.currentTabId
                         )
                         .coordinateSpace(name: dragCoordinateSpace)
                         .background(shouldShowSplit ? Color.clear : Color(nsColor: .windowBackgroundColor))
@@ -230,20 +235,6 @@ struct WebsiteView: View {
                 }
             }
             VStack {
-                HStack {
-                    Spacer()
-                    Group {
-                        if let assist = browserManager.oauthAssist,
-                           browserManager.currentTab(for: windowState)?.id == assist.tabId {
-                            OAuthAssistBanner(host: assist.host)
-                                .environmentObject(browserManager)
-                                .environment(windowState)
-                                .padding(10)
-                        }
-                    }
-                    // Animate toast insertions/removals
-                    .animation(.smooth(duration: 0.25), value: browserManager.oauthAssist != nil)
-                }
                 Spacer()
                 if nookSettings.showLinkStatusBar {
                     HStack {
@@ -444,6 +435,8 @@ struct TabCompositorWrapper: NSViewRepresentable {
     var leftId: UUID?
     var rightId: UUID?
     let windowState: BrowserWindowState
+    var compositorVersion: Int
+    var currentTabId: UUID?
 
     class Coordinator {
         weak var browserManager: BrowserManager?
@@ -568,38 +561,28 @@ struct TabCompositorWrapper: NSViewRepresentable {
     }
 
     private func updateCompositor(_ containerView: NSView) {
-        print("🔍 [MEMDEBUG] updateCompositor() CALLED - Window: \(windowState.id.uuidString.prefix(8)), Size: \(containerView.bounds.size)")
-        
         // Remove all existing webview subviews
         // Preserve the last overlay subview if present, then re-add
         let overlay = containerView.subviews.compactMap { $0 as? SplitDropCaptureView }.first
-        let existingSubviews = containerView.subviews.count
-        print("🔍 [MEMDEBUG]   Removing \(existingSubviews) existing subviews")
         containerView.subviews.forEach { $0.removeFromSuperview() }
-        
+
         // Add tabs that should be displayed in this window. If split view is active, show two panes;
         // otherwise show only the current tab.
         let allTabs = browserManager.tabsForDisplay(in: windowState)
-        print("🔍 [MEMDEBUG]   Processing \(allTabs.count) tabs for display")
-        for tab in allTabs {
-            print("🔍 [MEMDEBUG]     Tab: \(tab.id.uuidString.prefix(8)), Name: \(tab.name), isUnloaded: \(tab.isUnloaded)")
-        }
-        
+
         let split = browserManager.splitManager
         let splitState = split.getSplitState(for: windowState.id)
         
         // Skip rendering split panes during preview - show only the current tab at full size
         if splitState.isPreviewActive {
             // During preview, show only the current tab at full size
-            let currentId = browserManager.currentTab(for: windowState)?.id
-            for tab in allTabs {
-                if !tab.isUnloaded {
-                    let webView = webView(for: tab, windowId: windowState.id)
-                    webView.frame = containerView.bounds
-                    webView.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
-                    containerView.addSubview(webView)
-                    webView.isHidden = tab.id != currentId
-                }
+            let previewTab = browserManager.currentTab(for: windowState) ?? allTabs.first
+            if let currentTab = previewTab, !currentTab.isUnloaded {
+                let webView = webView(for: currentTab, windowId: windowState.id)
+                webView.frame = containerView.bounds
+                webView.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
+                webView.isHidden = false
+                containerView.addSubview(webView)
             }
         } else {
             // Normal split view rendering (when not in preview)
@@ -667,16 +650,14 @@ struct TabCompositorWrapper: NSViewRepresentable {
                     
                 }
             } else {
-                // Not in split view - show only current tab
-                for tab in allTabs {
-                    // Only add tabs that are still in the tab manager (not closed)
-                    if !tab.isUnloaded {
-                        let webView = webView(for: tab, windowId: windowState.id)
-                        webView.frame = containerView.bounds
-                        webView.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
-                        containerView.addSubview(webView)
-                        webView.isHidden = tab.id != browserManager.currentTab(for: windowState)?.id
-                    }
+                // Not in split view - only load the active tab's webview
+                let activeTab = browserManager.currentTab(for: windowState) ?? allTabs.first
+                if let currentTab = activeTab, !currentTab.isUnloaded {
+                    let webView = webView(for: currentTab, windowId: windowState.id)
+                    webView.frame = containerView.bounds
+                    webView.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
+                    webView.isHidden = false
+                    containerView.addSubview(webView)
                 }
             }
         }
@@ -701,10 +682,6 @@ struct TabCompositorWrapper: NSViewRepresentable {
             containerView.addSubview(newOverlay)
         }
         
-        // Log final state
-        let webViewCount = containerView.subviews.filter { $0 is WKWebView }.count
-        let totalSubviews = containerView.subviews.count
-        print("🔍 [MEMDEBUG] updateCompositor() COMPLETE - Window: \(windowState.id.uuidString.prefix(8)), WebViews in container: \(webViewCount), Total subviews: \(totalSubviews)")
     }
 
     private func makePaneContainer(frame: NSRect, isActive: Bool, accent: NSColor, side: SplitViewManager.Side) -> NSView {
@@ -810,19 +787,13 @@ struct TabCompositorWrapper: NSViewRepresentable {
     }
 
     private func webView(for tab: Tab, windowId: UUID) -> WKWebView {
-        print("🔍 [MEMDEBUG] WebsiteView.webView() REQUESTED - Tab: \(tab.id.uuidString.prefix(8)), Name: \(tab.name), Window: \(windowId.uuidString.prefix(8))")
-        print("🔍 [MEMDEBUG]   tab.isUnloaded: \(tab.isUnloaded), tab.assignedWebView exists: \(tab.assignedWebView != nil), primaryWindowId: \(tab.primaryWindowId?.uuidString.prefix(8) ?? "nil")")
-        
         // Use the new smart WebView assignment system
         // This ensures only ONE WebView per tab in single-window mode
         if let coordinator = browserManager.webViewCoordinator {
-            let webView = coordinator.getOrCreateWebView(for: tab, in: windowId, tabManager: browserManager.tabManager)
-            print("🔍 [MEMDEBUG]   -> Got WebView via smart assignment: \(Unmanaged.passUnretained(webView).toOpaque())")
-            return webView
+            return coordinator.getOrCreateWebView(for: tab, in: windowId, tabManager: browserManager.tabManager)
         }
-        
+
         // Fallback to old behavior (should never happen)
-        print("⚠️ [MEMDEBUG] WARNING: No WebViewCoordinator found, using fallback!")
         return browserManager.createWebView(for: tab.id, in: windowId)
     }
 

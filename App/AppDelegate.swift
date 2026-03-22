@@ -251,6 +251,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         else {
             return
         }
+
+        // Security: Only allow http/https URLs from external automation
+        guard let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return
+        }
+
         handleIncoming(url: url)
     }
 

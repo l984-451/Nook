@@ -347,7 +347,7 @@ struct GeneralSettingsView: View {
                     
                     SettingsSectionCard(
                         title: "AI Assistant",
-                        subtitle: "Configure AI chat powered by Gemini"
+                        subtitle: "Configure AI chat in the AI tab"
                     ) {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(alignment: .firstTextBaseline) {
@@ -356,102 +356,53 @@ struct GeneralSettingsView: View {
                                 Toggle("", isOn: $settings.showAIAssistant)
                                     .labelsHidden()
                             }
-                            
+
                             if nookSettings.showAIAssistant {
                                 Divider().opacity(0.4)
-                                
-                                HStack(alignment: .firstTextBaseline) {
-                                    Text("Gemini API Key")
-                                    Spacer()
-                                    SecureField("Enter API Key", text: $settings.geminiApiKey)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 220)
-                                }
-                                
-                                Text("Get your API key from Google AI Studio")
+
+                                Text("API keys and model settings are managed in the AI settings tab.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                
-                                Link("Get API Key →", destination: URL(string: "https://aistudio.google.com/apikey")!)
-                                    .font(.caption)
-                                
-                                Divider().opacity(0.4)
-                                
-                                HStack(alignment: .firstTextBaseline) {
-                                    Text("Model")
-                                    Spacer()
-                                    Picker(
-                                        "Model",
-                                        selection: $settings.geminiModel
-                                    ) {
-                                        ForEach(GeminiModel.allCases) { model in
-                                            VStack(alignment: .leading) {
-                                                Text(model.displayName)
-                                                Text(model.description)
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                            .tag(model)
-                                        }
-                                    }
-                                    .labelsHidden()
-                                    .pickerStyle(.menu)
-                                    .frame(width: 220)
+
+                                Button("Open AI Settings") {
+                                    nookSettings.currentSettingsTab = .ai
                                 }
-                                
-                                Text(nookSettings.geminiModel.description)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
                         }
                     }
 
                     SettingsSectionCard(
                         title: "Performance",
-                        subtitle: "Manage memory by unloading inactive tabs"
+                        subtitle: "How aggressively Nook manages tab memory"
                     ) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .firstTextBaseline) {
-                                Text("Tab Unload Timeout")
-                                Spacer()
-                                Picker(
-                                    "Tab Unload Timeout",
-                                    selection: Binding<TimeInterval>(
-                                        get: {
-                                            nearestTimeoutOption(
-                                                to: nookSettings
-                                                    .tabUnloadTimeout
-                                            )
-                                        },
-                                        set: { newValue in
-                                            nookSettings
-                                                .tabUnloadTimeout = newValue
-                                        }
-                                    )
-                                ) {
-                                    ForEach(unloadTimeoutOptions, id: \.self) {
-                                        value in
-                                        Text(formatTimeout(value)).tag(value)
-                                    }
+                        VStack(alignment: .leading, spacing: 12) {
+                            Picker("Tab Management", selection: Binding(
+                                get: { nookSettings.tabManagementMode },
+                                set: { nookSettings.tabManagementMode = $0 }
+                            )) {
+                                ForEach(TabManagementMode.allCases) { mode in
+                                    Label(mode.displayName, systemImage: mode.icon)
+                                        .tag(mode)
                                 }
-                                .labelsHidden()
-                                .pickerStyle(.menu)
-                                .frame(width: 220)
-                                .onAppear {
-                                    nookSettings
-                                        .tabUnloadTimeout =
-                                        nearestTimeoutOption(
-                                            to: nookSettings
-                                                .tabUnloadTimeout
-                                        )
+                            }
+                            .pickerStyle(.segmented)
+
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: nookSettings.tabManagementMode.icon)
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 16)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(nookSettings.tabManagementMode.displayName)
+                                        .font(.caption.bold())
+                                    Text(nookSettings.tabManagementMode.description)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
 
-                            Text(
-                                "Automatically unload inactive tabs to reduce memory usage."
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            Divider().opacity(0.4)
 
                             HStack {
                                 Button("Unload All Inactive Tabs") {
@@ -846,6 +797,11 @@ struct ProfilesSettingsView: View {
     private struct SpaceAssignmentRowView: View {
         @EnvironmentObject var browserManager: BrowserManager
         let space: Space
+        @State private var showDeleteConfirmation = false
+
+        private var canDelete: Bool {
+            browserManager.tabManager.spaces.count > 1
+        }
 
         var body: some View {
             HStack(spacing: 12) {
@@ -917,10 +873,31 @@ struct ProfilesSettingsView: View {
                         .labelStyle(.titleAndIcon)
                 }
                 .menuStyle(.borderlessButton)
+
+                // Delete space
+                if canDelete {
+                    Button(role: .destructive) {
+                        showDeleteConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.red.opacity(0.7))
+                    .help("Delete Space")
+                }
             }
             .padding(10)
             .background(Color(.controlBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 8))
+            .alert("Delete \"\(space.name)\"?", isPresented: $showDeleteConfirmation) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete", role: .destructive) {
+                    browserManager.tabManager.removeSpace(space.id)
+                }
+            } message: {
+                let tabCount = (browserManager.tabManager.tabsBySpace[space.id]?.count ?? 0)
+                Text("This will close \(tabCount) tab\(tabCount == 1 ? "" : "s") in this space.")
+            }
         }
 
         private var currentProfileName: String {
@@ -1151,8 +1128,6 @@ struct ShortcutsSettingsView: View {
                     get: { WebsiteShortcutProfile.isFeatureEnabled },
                     set: { WebsiteShortcutProfile.isFeatureEnabled = $0 }
                 ))
-                .toggleStyle(.switch)
-                .controlSize(.small)
                 .accessibilityLabel("Detect Website Shortcuts")
             }
             .padding(12)
@@ -1284,7 +1259,6 @@ private struct ShortcutRowView: View {
                         keyboardShortcutManager.toggleShortcut(action: shortcut.action, isEnabled: newValue)
                     }
                 ))
-                .toggleStyle(.switch)
                 .labelsHidden()
             }
         }
@@ -1440,6 +1414,11 @@ struct ExtensionsSettingsView: View {
         }
         .padding()
         .frame(minWidth: 520, minHeight: 360)
+        .onAppear {
+            if safariExtensions.isEmpty && !isScanningSafari {
+                scanForSafariExtensions()
+            }
+        }
     }
 
     private func scanForSafariExtensions() {
@@ -1578,7 +1557,6 @@ struct ExtensionRowView: View {
                         }
                     )
                 )
-                .toggleStyle(.switch)
 
                 Button("Remove") {
                     browserManager.uninstallExtension(`extension`.id)
@@ -1624,31 +1602,6 @@ struct AdvancedSettingsView: View {
     }
 }
 
-// MARK: - Helper Functions
-private let unloadTimeoutOptions: [TimeInterval] = [
-    300,  // 5 min
-    600,  // 10 min
-    900,  // 15 min
-    1800,  // 30 min
-    2700,  // 45 min
-    3600,  // 1 hr
-    7200,  // 2 hr
-    14400,  // 4 hr
-    28800,  // 8 hr
-    43200,  // 12 hr
-    86400,  // 24 hr
-]
-
-private func nearestTimeoutOption(to value: TimeInterval) -> TimeInterval {
-    guard
-        let nearest = unloadTimeoutOptions.min(by: {
-            abs($0 - value) < abs($1 - value)
-        })
-    else {
-        return value
-    }
-    return nearest
-}
 
 // MARK: - Styled Components
 struct SettingsSectionCard<Content: View>: View {
@@ -1915,23 +1868,3 @@ struct SiteSearchEntryEditor: View {
     }
 }
 
-private func formatTimeout(_ seconds: TimeInterval) -> String {
-    if seconds < 3600 {  // under 1 hour
-        let minutes = Int(seconds / 60)
-        return minutes == 1 ? "1 min" : "\(minutes) mins"
-    } else if seconds < 86400 {  // under 24 hours
-        let hours = seconds / 3600.0
-        let rounded = hours.rounded()
-        let isWhole = abs(hours - rounded) < 0.01
-        if isWhole {
-            let wholeHours = Int(rounded)
-            return wholeHours == 1 ? "1 hr" : "\(wholeHours) hrs"
-        } else {
-            // Show one decimal for non-integer hours
-            return String(format: "%.1f hrs", hours)
-        }
-    } else {
-        // 24 hours (cap in UI)
-        return "24 hr"
-    }
-}

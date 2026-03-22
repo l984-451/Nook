@@ -5,7 +5,6 @@
 //  Created by Maciek Bagiński on 07/12/2025.
 //
 
-import ColorfulX
 import SwiftUI
 
 struct MemberCard: View {
@@ -16,16 +15,15 @@ struct MemberCard: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Nook Member")
                 .font(.system(size: 24, weight: .semibold, design: .rounded))
-            Text("Free from The Browser Company")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.leading)
+                .foregroundStyle(.white)
             Spacer()
             Text("Thank you")
                 .font(.system(size: 32, weight: .bold, design: .serif))
+                .foregroundStyle(.white.opacity(0.9))
                 .italic()
             Text("For supporting our project")
                 .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.8))
             Spacer()
 
             HStack {
@@ -43,10 +41,18 @@ struct MemberCard: View {
         .padding(.vertical, 32)
         .frame(width: 250, height: 400)
         .background(
-            ColorfulView(
-                color: .aurora,
-                speed: .constant(0.5),
-                noise: .constant(4)
+            MeshGradient(
+                width: 3, height: 3,
+                points: [
+                    [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
+                    [0.0, 0.5], [0.5, 0.5], [1.0, 0.5],
+                    [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
+                ],
+                colors: [
+                    .indigo, .purple, .blue,
+                    .teal, .cyan, .mint,
+                    .blue, .indigo, .purple
+                ]
             )
         )
         .clipShape(
@@ -60,7 +66,7 @@ struct SocialButon: View {
     var icon: String
     var label: String
     var action: () -> Void
-    
+
     var body: some View {
         Button {
             action()

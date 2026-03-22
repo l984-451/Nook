@@ -10,6 +10,7 @@ import SwiftUI
 
 struct SpacesListItem: View {
     @EnvironmentObject var browserManager: BrowserManager
+    @EnvironmentObject var tabManager: TabManager
     @Environment(BrowserWindowState.self) private var windowState
 
     let space: Space
@@ -39,7 +40,8 @@ struct SpacesListItem: View {
 
     var body: some View {
         Button {
-            withAnimation(.easeOut(duration: 0.1)) {
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+            withAnimation(.easeInOut(duration: 0.2)) {
                 browserManager.setActiveSpace(space, in: windowState)
             }
         } label: {
@@ -82,7 +84,7 @@ struct SpacesListItem: View {
                     .background(EmojiPickerAnchor(manager: emojiManager))
                     .onChange(of: emojiManager.selectedEmoji) { _, newValue in
                         space.icon = newValue
-                        browserManager.tabManager.persistSnapshot()
+                        tabManager.persistSnapshot()
                     }
 
             } else {
@@ -91,7 +93,7 @@ struct SpacesListItem: View {
                     .background(EmojiPickerAnchor(manager: emojiManager))
                     .onChange(of: emojiManager.selectedEmoji) { _, newValue in
                         space.icon = newValue
-                        browserManager.tabManager.persistSnapshot()
+                        tabManager.persistSnapshot()
                     }
             }
         }
@@ -113,7 +115,7 @@ struct SpacesListItem: View {
             Label("Space Settings", systemImage: "gear")
         }
 
-        if browserManager.tabManager.spaces.count > 1 {
+        if tabManager.spaces.count > 1 {
             Button(role: .destructive) {
                 showDeleteConfirmation()
             } label: {
@@ -126,8 +128,8 @@ struct SpacesListItem: View {
 
     private func showDeleteConfirmation() {
         // Count both regular and space-pinned tabs
-        let regularTabsCount = browserManager.tabManager.tabsBySpace[space.id]?.count ?? 0
-        let spacePinnedTabsCount = browserManager.tabManager.spacePinnedTabs(for: space.id).count
+        let regularTabsCount = tabManager.tabsBySpace[space.id]?.count ?? 0
+        let spacePinnedTabsCount = tabManager.spacePinnedTabs(for: space.id).count
         let tabsCount = regularTabsCount + spacePinnedTabsCount
 
         browserManager.dialogManager.showDialog(
@@ -135,9 +137,9 @@ struct SpacesListItem: View {
                 spaceName: space.name,
                 spaceIcon: space.icon,
                 tabsCount: tabsCount,
-                isLastSpace: browserManager.tabManager.spaces.count <= 1,
+                isLastSpace: tabManager.spaces.count <= 1,
                 onDelete: {
-                    browserManager.tabManager.removeSpace(space.id)
+                    tabManager.removeSpace(space.id)
                     browserManager.dialogManager.closeDialog()
                 },
                 onCancel: {
@@ -155,14 +157,14 @@ struct SpacesListItem: View {
                 onSave: { newName, newIcon, newProfileId in
                     do {
                         if newIcon != space.icon {
-                            try browserManager.tabManager.updateSpaceIcon(
+                            try tabManager.updateSpaceIcon(
                                 spaceId: space.id,
                                 icon: newIcon
                             )
                         }
 
                         if newName != space.name {
-                            try browserManager.tabManager.renameSpace(
+                            try tabManager.renameSpace(
                                 spaceId: space.id,
                                 newName: newName
                             )
@@ -170,7 +172,7 @@ struct SpacesListItem: View {
 
                         // Update profile if changed
                         if newProfileId != space.profileId, let profileId = newProfileId {
-                            browserManager.tabManager.assign(spaceId: space.id, toProfile: profileId)
+                            tabManager.assign(spaceId: space.id, toProfile: profileId)
                         }
 
                         browserManager.dialogManager.closeDialog()
