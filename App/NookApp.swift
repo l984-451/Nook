@@ -213,6 +213,12 @@ struct BackgroundWindowModifier: NSViewRepresentable {
                 window.standardWindowButton(.miniaturizeButton)?.isHidden = true
                 window.minSize = NSSize(width: 470, height: 382)
                 window.contentMinSize = NSSize(width: 470, height: 382)
+
+                // Persist and restore window frame (position + size) across launches.
+                // setFrameAutosaveName makes macOS automatically save the frame to
+                // UserDefaults whenever it changes, so the window size is remembered
+                // on close — not just on quit.
+                window.setFrameAutosaveName("NookBrowserWindow")
             }
         }
         return view
