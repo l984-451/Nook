@@ -86,6 +86,7 @@ struct NookApp: App {
                 .environment(keyboardShortcutManager)
                 .environment(aiConfigService)
                 .environment(mcpManager)
+                .environment(tabOrganizerManager)
         }
     }
 
