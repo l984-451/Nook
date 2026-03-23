@@ -38,6 +38,8 @@ struct SpaceView: View {
     @EnvironmentObject var tabManager: TabManager
     @Environment(BrowserWindowState.self) private var windowState
     @Environment(CommandPalette.self) private var commandPalette
+    @Environment(TabOrganizerManager.self) private var tabOrganizerManager
+    @Environment(\.nookSettings) private var nookSettings
     @EnvironmentObject var gradientColorManager: GradientColorManager
     @ObservedObject private var dragSession = NookDragSessionManager.shared
     @State private var canScrollUp: Bool = false
@@ -468,9 +470,22 @@ struct SpaceView: View {
 
     private var newTabButtonSectionWithClear: some View {
         VStack(spacing: 0) {
-            SpaceSeparator(isHovering: $isSidebarHovered) {
-                tabManager.clearRegularTabs(for: space.id)
-            }
+            SpaceSeparator(
+                isHovering: $isSidebarHovered,
+                onClear: {
+                    tabManager.clearRegularTabs(for: space.id)
+                },
+                onOrganize: nookSettings.tabOrganizerEnabled ? {
+                    Task {
+                        await tabOrganizerManager.organizeTabs(
+                            in: space,
+                            using: tabManager
+                        )
+                    }
+                } : nil,
+                isOrganizing: tabOrganizerManager.isOrganizing,
+                tabCount: tabs.count
+            )
             .padding(.horizontal, 8)
             .padding(.top, 4)
 
