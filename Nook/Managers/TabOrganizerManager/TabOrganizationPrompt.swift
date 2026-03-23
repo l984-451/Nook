@@ -54,15 +54,46 @@ enum TabOrganizationPrompt {
 
     private static func buildSystem() -> String {
         """
-        You organize browser tabs. Given a numbered list of tabs, output JSON with this exact schema:
-        {"groups":[{"name":"short name","tabs":[1,2,5]}],"renames":[{"tab":1,"name":"shorter name"}],"sort":[3,1,2,5,4],"duplicates":[{"keep":1,"close":[3]}]}
+        You are a browser tab organizer. You will receive a numbered list of tabs. \
+        Respond with ONLY a JSON object, no other text.
 
-        Rules:
-        - Group by topic/purpose, not by domain
-        - Group names: 1-3 words
-        - Only rename tabs with cluttered titles (ads, long product names, repeated site names)
-        - Only flag true duplicates (same page or same content, different URL)
-        - Output ONLY valid JSON, nothing else
+        JSON schema:
+        {
+          "groups": [{"name": "Topic", "tabs": [1, 2, 5]}],
+          "renames": [{"tab": 1, "name": "Clean Title"}],
+          "sort": [3, 1, 2, 5, 4],
+          "duplicates": [{"keep": 1, "close": [3]}]
+        }
+
+        GROUPING rules:
+        - Group tabs by topic or purpose, NOT by website
+        - Group names must be 1-3 words
+        - All tabs stay in their current space. Do NOT move tabs between spaces
+        - A tab can only be in one group
+
+        RENAME rules:
+        - Only rename tabs with ugly titles (long product names, site prefixes, tracking params)
+        - Good rename: "Amazon.com: Anker USB-C Hub 7-in-1 Docking Station - Electronics" -> "Anker USB-C Hub"
+        - Do NOT rename tabs that already have clean short titles
+
+        DUPLICATE rules — be very strict:
+        - A duplicate is ONLY when two tabs point to the exact same page
+        - Same website does NOT mean duplicate. github.com/repo-a and github.com/repo-b are NOT duplicates
+        - facebook.com/profile and facebook.com/messages are NOT duplicates
+        - Only mark as duplicate if the URLs are identical or nearly identical (e.g. with/without trailing slash)
+
+        SORT rules:
+        - Order tabs so related topics are adjacent
+
+        Example input:
+        1. "GitHub - anthropics/claude-code" | github.com/anthropics/claude-code
+        2. "Amazon.com: Anker USB-C Hub 7-in-1..." | amazon.com/dp/B08X...
+        3. "Best USB-C Hubs 2026 - Wirecutter" | nytimes.com/wirecutter/reviews/best-usb-c-hubs
+        4. "GitHub - anthropics/claude-code: CLI" | github.com/anthropics/claude-code
+        5. "Swift Documentation" | developer.apple.com/documentation/swift
+
+        Example output:
+        {"groups":[{"name":"Shopping","tabs":[2,3]},{"name":"Development","tabs":[1,5]}],"renames":[{"tab":2,"name":"Anker USB-C Hub"}],"sort":[1,4,5,2,3],"duplicates":[{"keep":1,"close":[4]}]}
         """
     }
 

@@ -26,20 +26,11 @@ final class TabOrganizerManager {
     /// The local LLM engine used for inference.
     let engine: LocalLLMEngine
 
-    /// The parsed organization plan from the last run, if any.
-    private(set) var plan: TabOrganizationPlan?
-
-    /// Maps 1-based prompt indices to actual Tab objects for the current plan.
-    private(set) var tabMapping: [Int: Tab] = [:]
-
-    /// Tabs that were not assigned to any group in the current plan.
-    private(set) var ungroupedTabs: [TabInput] = []
+    /// Maps 1-based prompt indices to actual Tab objects for the current run.
+    private var tabMapping: [Int: Tab] = [:]
 
     /// Whether an organization run is currently in progress.
     private(set) var isOrganizing: Bool = false
-
-    /// Whether the preview sheet should be shown.
-    private(set) var showPreview: Bool = false
 
     /// The last error message, if any.
     private(set) var error: String?
@@ -140,17 +131,32 @@ final class TabOrganizerManager {
             let validRange = 1...tabs.count
             let parsedPlan = try TabOrganizationPlanParser.parse(output, validRange: validRange)
 
-            // Compute ungrouped tabs (tabs not mentioned in any group)
-            let groupedIndices = Set(parsedPlan.groups.flatMap(\.tabs))
-            let ungrouped = inputs.filter { !groupedIndices.contains($0.index) }
-
-            // Update state for the preview UI
-            self.plan = parsedPlan
-            self.tabMapping = mapping
-            self.ungroupedTabs = ungrouped
-            self.showPreview = true
-
             Self.log.info("Organization plan ready: \(parsedPlan.groups.count) groups, \(parsedPlan.renames.count) renames, \(parsedPlan.duplicates.count) duplicate sets")
+
+            // Apply immediately — no preview sheet
+            self.tabMapping = mapping
+            let accepted = AcceptedChanges(
+                acceptedGroupIds: Set(parsedPlan.groups.map(\.id)),
+                acceptedRenameIds: Set(parsedPlan.renames.map(\.id)),
+                acceptedDuplicateIds: Set(parsedPlan.duplicates.map(\.id)),
+                applySortOrder: parsedPlan.sort != nil
+            )
+
+            let snapshot = TabOrganizationApplier.apply(
+                plan: parsedPlan,
+                accepted: accepted,
+                tabMapping: mapping,
+                spaceId: space.id,
+                tabManager: tabManager
+            )
+
+            // Store undo state
+            undoSnapshot = snapshot
+            undoSpaceId = space.id
+            canUndo = true
+            self.tabMapping = [:]
+
+            Self.log.info("Organization applied")
 
         } catch {
             let message = error.localizedDescription
@@ -159,41 +165,6 @@ final class TabOrganizerManager {
         }
 
         isOrganizing = false
-    }
-
-    // MARK: - Apply
-
-    /// Apply the accepted changes from the current plan.
-    ///
-    /// - Parameters:
-    ///   - accepted: Which plan items the user accepted in the preview sheet.
-    ///   - spaceId: The space these tabs belong to.
-    ///   - tabManager: The tab manager to mutate.
-    func applyPlan(accepted: AcceptedChanges, spaceId: UUID, tabManager: TabManager) {
-        guard let plan else {
-            Self.log.warning("applyPlan called with no plan")
-            return
-        }
-
-        Self.log.info("Applying organization plan")
-
-        let snapshot = TabOrganizationApplier.apply(
-            plan: plan,
-            accepted: accepted,
-            tabMapping: tabMapping,
-            spaceId: spaceId,
-            tabManager: tabManager
-        )
-
-        // Store undo state
-        undoSnapshot = snapshot
-        undoSpaceId = spaceId
-        canUndo = true
-
-        // Clear plan state
-        clearPlanState()
-
-        Self.log.info("Organization plan applied successfully")
     }
 
     // MARK: - Undo
@@ -223,21 +194,10 @@ final class TabOrganizerManager {
         Self.log.info("Undo complete")
     }
 
-    // MARK: - Dismiss
-
-    /// Dismiss the current plan without applying it.
-    func dismissPlan() {
-        clearPlanState()
-        Self.log.info("Plan dismissed")
-    }
-
     // MARK: - Private
 
     private func clearPlanState() {
-        plan = nil
         tabMapping = [:]
-        ungroupedTabs = []
-        showPreview = false
         error = nil
     }
 }

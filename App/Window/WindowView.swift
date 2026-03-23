@@ -160,16 +160,6 @@ struct WindowView: View {
         .environmentObject(browserManager.gradientColorManager)
         .environmentObject(browserManager.splitManager)
         .environmentObject(hoverSidebarManager)
-        .sheet(isPresented: Binding(
-            get: { tabOrganizerManager.showPreview },
-            set: { if !$0 { tabOrganizerManager.dismissPlan() } }
-        )) {
-            TabOrganizerPreviewSheet(
-                spaceId: windowState.currentSpaceId ?? UUID(),
-                tabManager: browserManager.tabManager
-            )
-            .environment(tabOrganizerManager)
-        }
         .preferredColorScheme(resolvedColorScheme)
     }
 
