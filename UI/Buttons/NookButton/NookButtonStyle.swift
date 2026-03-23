@@ -143,6 +143,21 @@ struct NookButtonStyle: ButtonStyle {
     }
 }
 
+// MARK: - Scale Button Style
+
+struct ScaleButtonStyle: ButtonStyle {
+    var scale: CGFloat = 0.95
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? scale : 1.0)
+            .animation(
+                .easeInOut(duration: 0.1),
+                value: configuration.isPressed
+            )
+    }
+}
+
 // MARK: - Convenience Extensions
 
 extension ButtonStyle where Self == NookButtonStyle {
