@@ -63,7 +63,6 @@ The app uses ~30 specialized **Managers** for each feature domain, coordinated t
 | Manager | Purpose |
 |---------|---------|
 | **AIManager/** | AI chat: providers (Gemini, OpenRouter, Ollama, OpenAI-compatible), MCP client/server, browser tool execution |
-| **BoostsManager/** | Per-domain CSS/JS injection (brightness, contrast, sepia, tint, custom CSS/JS, font override, zoom) |
 | **DialogManager/** | Modal dialogs: profile creation, space editing, basic auth, settings, import, confirmations |
 | **DownloadManager/** | File downloads via `WKDownloadDelegate` |
 | **DragManager/** | `TabDragManager` (drag container types) and `DragLockManager` (conflict prevention). Legacy system — see DragDrop below |
@@ -88,7 +87,7 @@ The app uses ~30 specialized **Managers** for each feature domain, coordinated t
 ### State Management
 
 - **`@Observable`** (Swift Observation): `Profile`, `Space`, `Tab`, `BrowserWindowState`, `WebViewCoordinator`, `WindowRegistry`, `AIService`
-- **`@Published` / `ObservableObject`** (Combine): `BrowserManager`, `Tab` (dual — uses both patterns), `ExtensionManager`, `NookDragSessionManager`, `PeekManager`, `BoostsManager`
+- **`@Published` / `ObservableObject`** (Combine): `BrowserManager`, `Tab` (dual — uses both patterns), `ExtensionManager`, `NookDragSessionManager`, `PeekManager`
 - **SwiftData**: `SpaceEntity`, `ProfileEntity`, `TabEntity`, `FolderEntity`, `HistoryEntity`, `ExtensionEntity`, `TabsStateEntity`
 - **UserDefaults**: `NookSettingsService` (all app settings)
 - All state is `@MainActor` confined for thread safety.
@@ -148,15 +147,6 @@ Located in `Nook/Managers/AIManager/`:
 - **Tools/**: `BrowserTools` (tool definitions), `BrowserToolExecutor` (executes browser actions from AI)
 
 Settings stored in `NookSettingsService`: `aiProvider`, API keys per provider, model selection, web search config.
-
-## Boosts System
-
-Per-domain website customization via CSS/JS injection (`Nook/Managers/BoostsManager/`):
-
-- `BoostConfig`: brightness, contrast, sepia, tint color/strength, custom CSS, custom JS, font family, page zoom, text transform
-- Configs stored per normalized domain in UserDefaults
-- `WKUserScript` injection with caching (`scriptCache`)
-- `BoostsWindowManager`: UI for editing boosts
 
 ## Entitlements & Security
 

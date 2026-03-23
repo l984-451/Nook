@@ -89,7 +89,6 @@ enum ShortcutAction: String, CaseIterable, Hashable, Codable {
     case muteUnmuteAudio = "mute_unmute_audio"                 // Cmd+M
     case installExtension = "install_extension"                // Cmd+Shift+E
     case customizeSpaceGradient = "customize_space_gradient"   // Cmd+Shift+G
-    case createBoost = "create_boost"                          // Cmd+Shift+B
     case organizeTabs = "organize_tabs"                        // Cmd+Shift+Option+O
 
     var displayName: String {
@@ -138,7 +137,6 @@ enum ShortcutAction: String, CaseIterable, Hashable, Codable {
         case .muteUnmuteAudio: return "Mute/Unmute Audio"
         case .installExtension: return "Install Extension"
         case .customizeSpaceGradient: return "Customize Space Gradient"
-        case .createBoost: return "Create Boost"
         case .organizeTabs: return "Organize Tabs"
         }
     }
@@ -175,8 +173,6 @@ enum ShortcutAction: String, CaseIterable, Hashable, Codable {
             return .tools
         case .customizeSpaceGradient:
             return .spaces
-        case .createBoost:
-            return .tools
         case .organizeTabs:
             return .tools
         }
@@ -357,7 +353,6 @@ extension KeyboardShortcut {
             KeyboardShortcut(action: .muteUnmuteAudio, keyCombination: KeyCombination(key: "m", modifiers: [.command])),
             KeyboardShortcut(action: .installExtension, keyCombination: KeyCombination(key: "e", modifiers: [.command, .shift])),
             KeyboardShortcut(action: .customizeSpaceGradient, keyCombination: KeyCombination(key: "g", modifiers: [.command, .shift])),
-            KeyboardShortcut(action: .createBoost, keyCombination: KeyCombination(key: "b", modifiers: [.command, .shift])),
             KeyboardShortcut(action: .organizeTabs, keyCombination: KeyCombination(key: "o", modifiers: [.command, .shift, .option]))
         ]
     }

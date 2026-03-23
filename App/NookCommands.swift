@@ -387,14 +387,6 @@ struct NookCommands: Commands {
                 }
                 .modifier(dynamicShortcut(.customizeSpaceGradient))
                 .disabled(browserManager.tabManager.currentSpace == nil)
-
-                Divider()
-
-                Button("Create Boosts") {
-                    browserManager.showBoostsDialog()
-                }
-                .modifier(dynamicShortcut(.createBoost))
-                .disabled(browserManager.currentTabForActiveWindow() == nil)
             }
         }
     }

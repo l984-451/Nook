@@ -450,109 +450,6 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         }
     }
 
-    // MARK: - Boosts Integration
-    
-    // Track boost scripts to optimize removal (only remove boost scripts, not all scripts)
-    // Use array instead of Set since WKUserScript doesn't conform to Hashable
-    private var currentBoostScripts: [WKUserScript] = []
-    
-    private func setupBoostUserScript(for url: URL, in webView: WKWebView) {
-        guard let browserManager = browserManager,
-            let domain = url.host
-        else {
-            return
-        }
-
-        let userContentController = webView.configuration.userContentController
-        let boostScriptIdentifier = "NOOK_BOOST_SCRIPT_IDENTIFIER"
-        
-        // Optimized: Only remove boost scripts, preserve other user scripts
-        // This is much faster than removing all scripts and re-adding them
-        if !currentBoostScripts.isEmpty {
-            // Remove all user scripts — selectively re-adding non-boost scripts
-            // was causing crashes on boosted pages, so we clear everything and
-            // re-inject fresh boost scripts below.
-            userContentController.removeAllUserScripts()
-            currentBoostScripts.removeAll()
-        } else {
-            // First time setup - still need to check for any existing boost scripts
-            // (in case webview was reused or scripts were added elsewhere)
-            let existingBoostScripts = userContentController.userScripts.filter { script in
-                script.source.contains(boostScriptIdentifier)
-            }
-            
-            if !existingBoostScripts.isEmpty {
-                // Remove existing boost scripts
-                let remainingScripts = userContentController.userScripts.filter { script in
-                    !script.source.contains(boostScriptIdentifier)
-                }
-                userContentController.removeAllUserScripts()
-                remainingScripts.forEach { userContentController.addUserScript($0) }
-            }
-        }
-
-        // Check if this domain has a boost configured
-        guard let boostConfig = browserManager.boostsManager.getBoost(for: domain) else {
-            // No boost for this domain - scripts already removed above
-            return
-        }
-
-        #if DEBUG
-        print("🚀 [Tab] Setting up boost user scripts for domain: \(domain)")
-        #endif
-
-        // Create and add boost user scripts (will inject at document start)
-        // Returns array: [fontScript (optional), mainBoostScript]
-        let boostScripts = browserManager.boostsManager.createBoostUserScripts(for: boostConfig, domain: domain)
-        
-        // Track these scripts for efficient removal later
-        // Prevent duplicates by checking if script source already exists
-        let existingSources = Set(userContentController.userScripts.map { $0.source })
-        for script in boostScripts {
-            // Only add if not already present (prevents duplicates during rapid navigation)
-            if !existingSources.contains(script.source) {
-                currentBoostScripts.append(script)
-                userContentController.addUserScript(script)
-            }
-        }
-        #if DEBUG
-        print("✅ [Tab] Added \(boostScripts.count) boost script(s) for: \(domain)")
-        #endif
-    }
-    
-    private func injectBoostIfNeeded(for url: URL, in webView: WKWebView) {
-        // This method is kept for backward compatibility but boost injection
-        // now happens via user scripts at document start
-        // Fallback: still inject if user script didn't work
-        guard let browserManager = browserManager,
-            let domain = url.host
-        else {
-            return
-        }
-
-        // Check if this domain has a boost configured
-        guard let boostConfig = browserManager.boostsManager.getBoost(for: domain) else {
-            return
-        }
-
-        #if DEBUG
-        print("🚀 [Tab] Fallback boost injection for domain: \(domain)")
-        #endif
-
-        // Inject boost with a slight delay to ensure DOM is ready
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            browserManager.boostsManager.injectBoost(boostConfig, into: webView) { success in
-                #if DEBUG
-                if success {
-                    print("✅ [Tab] Fallback boost injection successful for: \(domain)")
-                } else {
-                    print("❌ [Tab] Fallback boost injection failed for: \(domain)")
-                }
-                #endif
-            }
-        }
-    }
-
     // MARK: - WebView Setup
 
     private func setupWebView() {
@@ -2618,9 +2515,6 @@ extension Tab: WKNavigationDelegate {
 
             // CONTENT BLOCKER: Fallback scriptlet injection
             browserManager?.contentBlockerManager.injectFallbackScripts(for: newURL, in: webView, tab: self)
-
-            // BOOSTS: Inject boost if domain has one configured
-            injectBoostIfNeeded(for: newURL, in: webView)
         }
 
         // CRITICAL: Update navigation state after back/forward navigation
@@ -2679,7 +2573,7 @@ extension Tab: WKNavigationDelegate {
         updateNavigationStateEnhanced(source: "didCommit")
 
         // Trigger background color extraction after page fully loads
-        // Wait a bit for boosts to apply and rendering to complete
+        // Wait a bit for rendering to complete
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak webView] in
             guard let self = self, let webView = webView else { return }
             // Only sample if page is still loaded (not navigating away)
@@ -2773,9 +2667,6 @@ extension Tab: WKNavigationDelegate {
 
             // Setup content blocker scripts before navigation starts
             browserManager?.contentBlockerManager.setupContentBlockerScripts(for: url, in: webView, tab: self)
-
-            // Setup boost user script before navigation starts
-            setupBoostUserScript(for: url, in: webView)
         }
 
         // Check for Option+click to trigger Peek for any link

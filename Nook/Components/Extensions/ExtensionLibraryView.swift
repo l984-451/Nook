@@ -70,12 +70,6 @@ struct ExtensionLibraryView: View {
             .disabled(currentTab == nil)
 
             MuteButton(tab: currentTab)
-
-            UtilityButton(icon: "slider.horizontal.3", label: "Boosts") {
-                guard let tab = currentTab, let webView = tab.webView, let host = tab.url.host else { return }
-                BoostsWindowManager.shared.show(for: webView, domain: host, boostsManager: browserManager.boostsManager)
-            }
-            .disabled(currentTab == nil)
         }
         .padding(12)
     }
@@ -325,35 +319,6 @@ private struct CopyButton: View {
                 Text(showCheckmark ? "Copied!" : label)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(showCheckmark ? .green : .secondary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .background(isHovering ? Color.secondary.opacity(0.12) : Color.secondary.opacity(0.06))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-    }
-}
-
-// MARK: - Utility Button
-
-private struct UtilityButton: View {
-    let icon: String
-    let label: String
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 15))
-                    .frame(width: 28, height: 28)
-                Text(label)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)

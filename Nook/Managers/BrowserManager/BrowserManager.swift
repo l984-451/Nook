@@ -406,7 +406,6 @@ class BrowserManager: ObservableObject {
     var findManager: FindManager
     var importManager: ImportManager
     var zoomManager = ZoomManager()
-    var boostsManager = BoostsManager()
     var keyboardShortcutManager: KeyboardShortcutManager?
     weak var nookSettings: NookSettingsService?
     weak var aiService: AIService?
@@ -1121,44 +1120,6 @@ class BrowserManager: ObservableObject {
                 }
             )
         }
-    }
-
-    func showBoostsDialog() {
-        guard let currentTab = currentTabForActiveWindow(),
-            let domain = currentTab.url.host,
-            let activeWindow = windowRegistry?.activeWindow,
-            let webView = getWebView(for: currentTab.id, in: activeWindow.id)
-        else {
-            dialogManager.showDialog {
-                StandardDialog(
-                    header: {
-                        DialogHeader(
-                            icon: "bolt.circle",
-                            title: "No Website Available",
-                            subtitle: "Navigate to a website to create a boost."
-                        )
-                    },
-                    content: {
-                        Color.clear.frame(height: 0)
-                    },
-                    footer: {
-                        DialogFooter(rightButtons: [
-                            DialogButton(text: "OK", variant: .primary) { [weak self] in
-                                self?.closeDialog()
-                            }
-                        ])
-                    }
-                )
-            }
-            return
-        }
-
-        // Show the boost window
-        BoostsWindowManager.shared.show(
-            for: webView,
-            domain: domain,
-            boostsManager: boostsManager
-        )
     }
 
     func closeDialog() {
