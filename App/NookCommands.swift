@@ -13,15 +13,17 @@ struct NookCommands: Commands {
     let browserManager: BrowserManager
     let windowRegistry: WindowRegistry
     let shortcutManager: KeyboardShortcutManager
+    let tabOrganizerManager: TabOrganizerManager
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @Environment(\.nookSettings) var nookSettings
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    init(browserManager: BrowserManager, windowRegistry: WindowRegistry, shortcutManager: KeyboardShortcutManager) {
+    init(browserManager: BrowserManager, windowRegistry: WindowRegistry, shortcutManager: KeyboardShortcutManager, tabOrganizerManager: TabOrganizerManager) {
         self.browserManager = browserManager
         self.windowRegistry = windowRegistry
         self.shortcutManager = shortcutManager
+        self.tabOrganizerManager = tabOrganizerManager
     }
 
     // MARK: - Dynamic Keyboard Shortcuts
@@ -173,6 +175,28 @@ struct NookCommands: Commands {
                 browserManager.currentTabForActiveWindow() == nil
                     || !(browserManager.currentTabHasVideoContent()
                         || browserManager.currentTabHasPiPActive())
+            )
+
+            Divider()
+
+            Button("Organize Tabs") {
+                let targetSpace =
+                    windowRegistry.activeWindow?.currentSpaceId.flatMap { id in
+                        browserManager.tabManager.spaces.first(where: { $0.id == id })
+                    } ?? browserManager.tabManager.currentSpace
+                if let space = targetSpace {
+                    Task {
+                        await tabOrganizerManager.organizeTabs(
+                            in: space,
+                            using: browserManager.tabManager
+                        )
+                    }
+                }
+            }
+            .modifier(dynamicShortcut(.organizeTabs))
+            .disabled(
+                tabOrganizerManager.isOrganizing
+                    || browserManager.tabManager.currentSpace == nil
             )
         }
 

@@ -548,6 +548,8 @@ class KeyboardShortcutManager {
                 browserManager.showGradientEditor()
             case .createBoost:
                 browserManager.showBoostsDialog()
+            case .organizeTabs:
+                NotificationCenter.default.post(name: .organizeTabsRequested, object: nil)
             }
 
             NotificationCenter.default.post(
@@ -587,4 +589,5 @@ class KeyboardShortcutManager {
 extension Notification.Name {
     static let shortcutExecuted = Notification.Name("shortcutExecuted")
     static let shortcutsChanged = Notification.Name("shortcutsChanged")
+    static let organizeTabsRequested = Notification.Name("organizeTabsRequested")
 }

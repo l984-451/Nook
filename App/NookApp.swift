@@ -70,7 +70,8 @@ struct NookApp: App {
             NookCommands(
                 browserManager: browserManager,
                 windowRegistry: windowRegistry,
-                shortcutManager: keyboardShortcutManager
+                shortcutManager: keyboardShortcutManager,
+                tabOrganizerManager: tabOrganizerManager
             )
         }
 
