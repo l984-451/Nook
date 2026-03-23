@@ -106,26 +106,36 @@ enum TabOrganizationApplier {
         let allTabs = Array(tabMapping.values)
         let preSnapshot = snapshot(tabs: allTabs)
 
-        var createdFolderIds: [UUID] = []
         var closedTabs: [TabSnapshot.ClosedTabState] = []
 
-        // 2. Apply groups — create folders and move tabs into them
-        for group in plan.groups where accepted.acceptedGroupIds.contains(group.id) {
-            let folder = tabManager.createFolder(for: spaceId, name: group.name)
-            createdFolderIds.append(folder.id)
-            log.debug("Created folder '\(group.name)' (\(folder.id)) for \(group.tabs.count) tabs")
+        // 2. Apply groups — sort tabs so grouped tabs are adjacent
+        // Groups define logical clusters; we sort by placing group members
+        // together in order, with ungrouped tabs at the end
+        if !plan.groups.isEmpty {
+            var orderedIndices: [Int] = []
+            var usedIndices = Set<Int>()
 
-            for tabIndex in group.tabs {
-                guard let tab = tabMapping[tabIndex] else {
-                    log.warning("Group '\(group.name)': no tab at index \(tabIndex)")
-                    continue
+            for group in plan.groups {
+                for tabIndex in group.tabs {
+                    if !usedIndices.contains(tabIndex) {
+                        orderedIndices.append(tabIndex)
+                        usedIndices.insert(tabIndex)
+                    }
                 }
-                // moveTabToFolder requires tab.spaceId != nil
-                if tab.spaceId == nil {
-                    tab.spaceId = spaceId
-                }
-                tabManager.moveTabToFolder(tab: tab, folderId: folder.id)
             }
+
+            // Append ungrouped tabs at the end in their original order
+            let allIndices = tabMapping.keys.sorted()
+            for idx in allIndices where !usedIndices.contains(idx) {
+                orderedIndices.append(idx)
+            }
+
+            // Apply the ordering
+            for (newIndex, tabPromptIndex) in orderedIndices.enumerated() {
+                guard let tab = tabMapping[tabPromptIndex] else { continue }
+                tab.index = newIndex
+            }
+            log.debug("Applied group-based ordering for \(orderedIndices.count) tabs")
         }
 
         // 3. Apply renames — set displayNameOverride on each tab
@@ -171,8 +181,8 @@ enum TabOrganizationApplier {
             }
         }
 
-        // 5. Apply sort order — set tab.index directly for each tab
-        if accepted.applySortOrder, let sortOrder = plan.sort, !sortOrder.isEmpty {
+        // 5. Apply sort order — only if groups didn't already reorder
+        if accepted.applySortOrder, let sortOrder = plan.sort, !sortOrder.isEmpty, plan.groups.isEmpty {
             for (newIndex, tabPromptIndex) in sortOrder.enumerated() {
                 guard let tab = tabMapping[tabPromptIndex] else {
                     log.warning("Sort: no tab at index \(tabPromptIndex)")
@@ -185,9 +195,12 @@ enum TabOrganizationApplier {
         }
 
         // Build final snapshot with created folders and closed tabs info
+        // Persist all changes at once
+        tabManager.persistSnapshot()
+
         return TabSnapshot(
             tabStates: preSnapshot.tabStates,
-            createdFolderIds: createdFolderIds,
+            createdFolderIds: [],
             closedTabs: closedTabs
         )
     }

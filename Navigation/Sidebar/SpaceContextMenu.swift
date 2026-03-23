@@ -11,9 +11,6 @@ import SwiftUI
 struct SpaceContextMenu: View {
     @EnvironmentObject var browserManager: BrowserManager
     @EnvironmentObject var tabManager: TabManager
-    @Environment(TabOrganizerManager.self) private var tabOrganizerManager
-    @Environment(\.nookSettings) var nookSettings
-
     let space: Space
     let canDelete: Bool
     let onEditName: (() -> Void)?
@@ -76,19 +73,6 @@ struct SpaceContextMenu: View {
             } label: {
                 Label("Space Settings", systemImage: "gear")
             }
-
-            // Organize tabs with AI
-            Button {
-                Task {
-                    await tabOrganizerManager.organizeTabs(
-                        in: space,
-                        using: browserManager.tabManager
-                    )
-                }
-            } label: {
-                Label("Organize Tabs", systemImage: "wand.and.stars")
-            }
-            .disabled(tabOrganizerManager.isOrganizing || !nookSettings.tabOrganizerEnabled)
 
             Divider()
 
