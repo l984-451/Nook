@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import WebKit
 
 struct CookieManagementView: View {
     @StateObject private var cookieManager = CookieManager()

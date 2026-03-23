@@ -28,7 +28,6 @@ class HistoryManager {
     // MARK: - Profile Switching
     func switchProfile(_ profileId: UUID?) {
         self.currentProfileId = profileId
-        print("🔁 [HistoryManager] Switched to profile: \(profileId?.uuidString ?? "nil")")
     }
     
     // MARK: - Public Methods
@@ -84,7 +83,6 @@ class HistoryManager {
             
             try context.save()
         } catch {
-            print("Error saving history entry: \(error)")
         }
     }
     
@@ -121,7 +119,6 @@ class HistoryManager {
             
             return (entries: entries, hasMore: hasMore)
         } catch {
-            print("Error fetching paginated history: \(error)")
             return (entries: [], hasMore: false)
         }
     }
@@ -166,7 +163,6 @@ class HistoryManager {
             
             return (entries: pageEntries.map { HistoryEntry(from: $0) }, hasMore: hasMore)
         } catch {
-            print("Error searching history: \(error)")
             return (entries: [], hasMore: false)
         }
     }
@@ -190,7 +186,6 @@ class HistoryManager {
             }
             return entities.map { HistoryEntry(from: $0) }
         } catch {
-            print("Error fetching most visited: \(error)")
             return []
         }
     }
@@ -212,12 +207,9 @@ class HistoryManager {
             
             try context.save()
             if let p = pf {
-                print("Cleared \(entitiesToDelete.count) history entries older than \(days) days for profile=\(p.uuidString)")
             } else {
-                print("Cleared \(entitiesToDelete.count) history entries older than \(days) days (all profiles)")
             }
         } catch {
-            print("Error clearing history: \(error)")
         }
     }
     
@@ -232,7 +224,6 @@ class HistoryManager {
                 try context.save()
             }
         } catch {
-            print("Error deleting history entry: \(error)")
         }
     }
     
@@ -253,7 +244,6 @@ class HistoryManager {
             let hosts: Set<String> = Set(entities.compactMap { URL(string: $0.url)?.host })
             return (count: entities.count, uniqueHosts: hosts.count)
         } catch {
-            print("Error computing history stats: \(error)")
             return (0, 0)
         }
     }

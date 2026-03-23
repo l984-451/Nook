@@ -773,7 +773,6 @@ struct TabCompositorWrapper: NSViewRepresentable {
             DispatchQueue.main.async {
                 self.hoveredLink = href
                 if let href = href {
-                    print("Hovering over link: \(href)")
                 }
             }
         }
@@ -824,19 +823,16 @@ private class ContainerView: NSView {
 
     // Forward right-clicks to the webview below so context menus work
     override func rightMouseDown(with event: NSEvent) {
-        print("🔽 [ContainerView] rightMouseDown received, forwarding to webview")
         // Find the webview at this point and forward the event
         let point = convert(event.locationInWindow, from: nil)
         // Use hitTest to find the actual view at this point (will skip overlay if hitTest returns nil)
         if let hitView = hitTest(point) {
             if let webView = hitView as? WKWebView {
-                print("🔽 [ContainerView] Found webview via hitTest, forwarding rightMouseDown")
                 webView.rightMouseDown(with: event)
                 return
             }
             // Check if hitView contains a webview
             if let webView = findWebView(in: hitView, at: point) {
-                print("🔽 [ContainerView] Found nested webview, forwarding rightMouseDown")
                 webView.rightMouseDown(with: event)
                 return
             }
@@ -844,12 +840,10 @@ private class ContainerView: NSView {
         // Fallback: search all subviews
         for subview in subviews.reversed() {
             if let webView = findWebView(in: subview, at: point) {
-                print("🔽 [ContainerView] Found webview in subviews, forwarding rightMouseDown")
                 webView.rightMouseDown(with: event)
                 return
             }
         }
-        print("🔽 [ContainerView] No webview found, calling super")
         super.rightMouseDown(with: event)
     }
     

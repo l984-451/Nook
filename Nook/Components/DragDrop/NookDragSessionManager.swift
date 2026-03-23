@@ -188,9 +188,6 @@ final class NookDragSessionManager: ObservableObject {
     // MARK: - Drag Lifecycle
 
     func beginDrag(item: NookDragItem, tab: Tab, from zone: DropZoneID, at index: Int, cursorScreenPoint: NSPoint) {
-        #if DEBUG
-        print("🚀 [DragSession] beginDrag: \(item.title) from \(zone) at \(index)")
-        #endif
         ensurePreviewWindow()
 
         // Set cursor position BEFORE draggedItem so the preview window
@@ -298,9 +295,6 @@ final class NookDragSessionManager: ObservableObject {
 
     func completeDrop(targetZone: DropZoneID, targetIndex: Int) {
         guard let item = draggedItem, let source = sourceZone else {
-            #if DEBUG
-            print("🔴 [DragSession] completeDrop: no draggedItem or sourceZone")
-            #endif
             return
         }
 

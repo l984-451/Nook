@@ -178,7 +178,6 @@ class KeyboardShortcutManager {
     func executeShortcut(_ event: NSEvent) -> Bool {
         // Prevent re-entrancy when forwarding events to WebView
         guard !isForwardingEvent else {
-            print("⌨️ [KSM] Skipping - already forwarding event")
             return false
         }
 
@@ -226,24 +225,19 @@ class KeyboardShortcutManager {
         }
         
         guard let keyCombination = KeyCombination(from: event) else { 
-            print("⌨️ [KSM] Could not create KeyCombination from event")
             return false
         }
         
-        print("⌨️ [KSM] ===== KEYDOWN: \(keyCombination.lookupKey) =====")
 
         guard let shortcut = shortcutMap[keyCombination.lookupKey],
               shortcut.isEnabled else {
-            print("⌨️ [KSM] No Nook shortcut for: \(keyCombination.lookupKey)")
             return false
         }
         
-        print("⌨️ [KSM] Found Nook shortcut: \(shortcut.action.displayName)")
 
         // MARK: - Website Shortcut Conflict Resolution
         // Check if this shortcut conflicts with a website shortcut
         if let windowId = windowRegistry?.activeWindow?.id {
-            print("⌨️ [KSM] Checking for website conflict, windowId: \(windowId)")
             let shouldPass = websiteShortcutDetector.shouldPassToWebsite(
                 keyCombination,
                 windowId: windowId,
@@ -252,20 +246,11 @@ class KeyboardShortcutManager {
             
             if shouldPass {
                 // First press: Forward event directly to the WebView
-                print("⌨️ [KSM] >>> FIRST PRESS - Forwarding to WebView <<<")
                 forwardEventToWebView(event)
                 return true // We handled it (by forwarding)
-            } else if websiteShortcutDetector.hasPendingShortcut(for: windowId) {
-                // Second press within timeout - we'll execute Nook action below
-                print("⌨️ [KSM] >>> SECOND PRESS - Executing Nook action <<<")
-            } else {
-                print("⌨️ [KSM] No conflict detected, executing Nook action")
             }
-        } else {
-            print("⌨️ [KSM] No active window found for conflict check")
         }
 
-        print("⌨️ [KSM] Executing Nook shortcut: \(shortcut.action.displayName)")
         executeAction(shortcut.action)
         return true
     }
@@ -276,7 +261,6 @@ class KeyboardShortcutManager {
               let tabId = windowState.currentTabId,
               let windowId = windowRegistry?.activeWindow?.id,
               let webView = browserManager?.getWebView(for: tabId, in: windowId) else {
-            print("⌨️ [KSM] Could not find WebView to forward event")
             return
         }
         
@@ -294,7 +278,6 @@ class KeyboardShortcutManager {
         
         // Also call keyDown for native WebView handling (scroll, copy/paste, etc.)
         webView.keyDown(with: event)
-        print("⌨️ [KSM] Event forwarded to WebView via JS and keyDown")
     }
     
     /// Dispatch a keyboard event to the WebView's DOM via JavaScript
@@ -360,9 +343,7 @@ class KeyboardShortcutManager {
         
         webView.evaluateJavaScript(js) { result, error in
             if let error = error {
-                print("⌨️ [KSM] JS dispatch error: \(error.localizedDescription)")
             } else {
-                print("⌨️ [KSM] JS dispatch result: \(result ?? "nil")")
             }
         }
     }

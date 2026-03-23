@@ -61,9 +61,6 @@ class SearchManager {
     @MainActor func updateProfileContext() {
         let pid = tabManager?.browserManager?.currentProfile?.id
         currentProfileId = pid
-        #if DEBUG
-        if let pid { print("🔎 [SearchManager] Profile context updated: \(pid.uuidString)") }
-        #endif
     }
     
     @MainActor func searchSuggestions(for query: String) {
@@ -220,7 +217,6 @@ class SearchManager {
                 
                 guard let data = data,
                       error == nil else {
-                    print("Search suggestions error: \(error?.localizedDescription ?? "Unknown error")")
                     return
                 }
                 
@@ -228,7 +224,6 @@ class SearchManager {
                     guard let jsonArray = try JSONSerialization.jsonObject(with: data) as? [Any],
                           jsonArray.count >= 2,
                           let suggestionsArray = jsonArray[1] as? [String] else {
-                        print("Invalid JSON response format")
                         return
                     }
                     
@@ -245,7 +240,6 @@ class SearchManager {
                     self?.updateSuggestionsIfNeeded(limitedSuggestions)
                     
                 } catch {
-                    print("JSON parsing error: \(error.localizedDescription)")
                 }
             }
         }
@@ -287,7 +281,6 @@ class SearchManager {
         // Only animate if less than 60% of suggestions are the same
         return similarityRatio < 0.6
     }
-    
     
     
     func clearSuggestions() {

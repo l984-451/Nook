@@ -101,7 +101,6 @@ struct SpaceTab: View {
                 Spacer()
 
 
-
                 if isHovering {
                     Button(action: onClose) {
                         Image(systemName: "xmark")

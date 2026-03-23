@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import WebKit
 
 struct CacheManagementView: View {
     @StateObject private var cacheManager = CacheManager()

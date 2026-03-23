@@ -130,7 +130,6 @@ final class SplitViewManager: ObservableObject {
             browserManager?.refreshCompositor(for: windowState)
         }
         
-        print("🪟 [SplitViewManager] Entered split mode for window \(windowId)")
     }
     
     /// Exit split mode for a specific window
@@ -152,7 +151,6 @@ final class SplitViewManager: ObservableObject {
             browserManager?.refreshCompositor(for: windowState)
         }
         
-        print("🪟 [SplitViewManager] Exited split mode for window \(windowId), keeping \(keep)")
     }
     
     /// Close a pane in a specific window
@@ -180,7 +178,6 @@ final class SplitViewManager: ObservableObject {
         if browserManager != nil, windowRegistry?.activeWindow?.id == windowId {
             updatePublishedState(from: WindowSplitState())
         }
-        print("🪟 [SplitViewManager] Cleaned up split state for window \(windowId)")
     }
     
     /// Handle tab closure to prevent "zombie split" state
@@ -189,10 +186,8 @@ final class SplitViewManager: ObservableObject {
         for (windowId, state) in windowSplitStates {
             if state.isSplit {
                 if state.leftTabId == tabId {
-                    print("🪟 [SplitViewManager] Closing left pane for window \(windowId) due to tab closure")
                     exitSplit(keep: .right, for: windowId)
                 } else if state.rightTabId == tabId {
-                    print("🪟 [SplitViewManager] Closing right pane for window \(windowId) due to tab closure")
                     exitSplit(keep: .left, for: windowId)
                 }
             }
@@ -378,7 +373,6 @@ final class SplitViewManager: ObservableObject {
             browserManager?.refreshCompositor(for: windowState)
         }
         
-        print("🪟 [SplitViewManager] Swapped sides for window \(windowId)")
     }
 
     func exitSplitCompletely() {

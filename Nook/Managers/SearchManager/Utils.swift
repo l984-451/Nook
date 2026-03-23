@@ -1,30 +1,6 @@
 import Foundation
 import SwiftUI
 
-public func isValidURL(_ string: String) -> Bool {
-  let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-
-  if trimmed.isEmpty || trimmed.contains(" ") {
-    return false
-  }
-
-  guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else {
-    return false
-  }
-
-  switch scheme {
-  case "http", "https", "ftp":
-    if let host = url.host, !host.isEmpty { return true }
-    return false
-  case "file":
-    return url.path.isEmpty == false
-  case "chrome-extension", "moz-extension", "webkit-extension", "safari-web-extension":
-    return (url.host?.isEmpty == false)
-  default:
-    return false
-  }
-}
-
 public func normalizeURL(_ input: String, queryTemplate: String) -> String {
   let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
 
