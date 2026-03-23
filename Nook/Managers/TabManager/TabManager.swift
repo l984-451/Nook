@@ -42,6 +42,8 @@ import OSLog
         let profileId: UUID?
         // Folder association for tabs within folders
         let folderId: UUID?
+        // Display name override (user or AI-assigned custom tab name)
+        let displayNameOverride: String?
 
         // Navigation state
         let currentURLString: String?
@@ -215,6 +217,7 @@ import OSLog
             e.spaceId = t.spaceId
             e.profileId = t.profileId
             e.folderId = t.folderId
+            e.displayNameOverride = t.displayNameOverride
             e.currentURLString = t.currentURLString
             e.canGoBack = t.canGoBack
             e.canGoForward = t.canGoForward
@@ -229,6 +232,7 @@ import OSLog
                 spaceId: t.spaceId,
                 profileId: t.profileId,
                 folderId: t.folderId,
+                displayNameOverride: t.displayNameOverride,
                 currentURLString: t.currentURLString,
                 canGoBack: t.canGoBack,
                 canGoForward: t.canGoForward
@@ -1966,6 +1970,7 @@ class TabManager: ObservableObject {
         t.folderId = e.folderId
         t.isPinned = e.isPinned
         t.isSpacePinned = e.isSpacePinned
+        t.displayNameOverride = e.displayNameOverride
 
         // Restore navigation state
         t.canGoBack = e.canGoBack
@@ -2240,6 +2245,7 @@ class TabManager: ObservableObject {
                     isSpacePinned: false,
                     profileId: pid,
                     folderId: t.folderId,
+                    displayNameOverride: t.displayNameOverride,
                     currentURLString: t.url.absoluteString,
                     canGoBack: t.canGoBack,
                     canGoForward: t.canGoForward
@@ -2262,6 +2268,7 @@ class TabManager: ObservableObject {
                     isSpacePinned: true,
                     profileId: nil,
                     folderId: t.folderId,
+                    displayNameOverride: t.displayNameOverride,
                     currentURLString: t.url.absoluteString,
                     canGoBack: t.canGoBack,
                     canGoForward: t.canGoForward
@@ -2281,6 +2288,7 @@ class TabManager: ObservableObject {
                     isSpacePinned: false,
                     profileId: nil,
                     folderId: t.folderId,
+                    displayNameOverride: t.displayNameOverride,
                     currentURLString: t.url.absoluteString,
                     canGoBack: t.canGoBack,
                     canGoForward: t.canGoForward
