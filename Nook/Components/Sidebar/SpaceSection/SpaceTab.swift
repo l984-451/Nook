@@ -93,7 +93,7 @@ struct SpaceTab: View {
                         }
                         .focused($isTextFieldFocused)
                 } else {
-                    Text(tab.name)
+                    Text(tab.displayName)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(textTab)
                         .lineLimit(1)

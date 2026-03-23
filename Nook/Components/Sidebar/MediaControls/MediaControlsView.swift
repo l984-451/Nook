@@ -54,7 +54,7 @@ struct MediaControlsView: View {
                 VStack(spacing: 8) {
                     // Tab name (shows on hover)
                     if isHovering {
-                        Text(tab.name)
+                        Text(tab.displayName)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.white)
                             .padding(.top, 4)

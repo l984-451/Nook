@@ -224,7 +224,7 @@ struct PinnedGrid: View {
     }
 
     private func safeTitle(_ tab: Tab) -> String {
-        let t = tab.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let t = tab.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? (tab.url.host ?? "New Tab") : t
     }
 

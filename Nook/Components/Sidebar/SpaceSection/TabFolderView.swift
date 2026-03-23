@@ -251,7 +251,7 @@ struct TabFolderView: View {
 
     private func folderTabView(_ tab: Tab, index: Int) -> some View {
         NookDragSourceView(
-            item: NookDragItem(tabId: tab.id, title: tab.name, urlString: tab.url.absoluteString),
+            item: NookDragItem(tabId: tab.id, title: tab.displayName, urlString: tab.url.absoluteString),
             tab: tab,
             zoneID: .folder(folder.id),
             index: index,
