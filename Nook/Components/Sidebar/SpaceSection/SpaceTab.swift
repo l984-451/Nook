@@ -24,7 +24,6 @@ struct SpaceTab: View {
     var body: some View {
         Button(action: {
             if isCurrentTab {
-                print("🔄 [SpaceTab] Starting rename for tab '\(tab.name)' in window \(windowState.id)")
                 tab.startRenaming()
                 isTextFieldFocused = true
             } else {
@@ -147,6 +146,9 @@ struct SpaceTab: View {
             Options()
         }
         .shadow(color: isActive ? shadowColor : Color.clear, radius: isActive ? 2 : 0, y: 1.5)
+        .onAppear {
+            tab.ensureFaviconLoaded()
+        }
     }
     
     @ViewBuilder

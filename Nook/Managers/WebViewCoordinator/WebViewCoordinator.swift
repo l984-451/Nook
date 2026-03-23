@@ -220,11 +220,12 @@ class WebViewCoordinator {
             return (tabId, webView)
         }
 
-        print("🧹 [WebViewCoordinator] Cleaning up \(webViewsToCleanup.count) WebViews for window \(windowId)")
+        // Build a lookup dictionary once instead of calling allTabs().first(where:) per webview
+        let allTabsMap = Dictionary(uniqueKeysWithValues: tabManager.allTabs().map { ($0.id, $0) })
 
         for (tabId, webView) in webViewsToCleanup {
             // Use comprehensive cleanup from Tab class
-            if let tab = tabManager.allTabs().first(where: { $0.id == tabId }) {
+            if let tab = allTabsMap[tabId] {
                 tab.cleanupCloneWebView(webView)
             } else {
                 // Fallback cleanup if tab is not found
@@ -239,22 +240,18 @@ class WebViewCoordinator {
             if webViewsByTabAndWindow[tabId]?.isEmpty == true {
                 webViewsByTabAndWindow.removeValue(forKey: tabId)
             }
-
-            print("✅ [WebViewCoordinator] Cleaned up WebView for tab \(tabId) in window \(windowId)")
         }
     }
 
     func cleanupAllWebViews(tabManager: TabManager) {
-        print("🧹 [WebViewCoordinator] Starting comprehensive cleanup for ALL WebViews")
-
-        let totalWebViews = webViewsByTabAndWindow.values.flatMap { $0.values }.count
-        print("🧹 [WebViewCoordinator] Cleaning up \(totalWebViews) WebViews across all windows")
+        // Build a lookup dictionary once instead of calling allTabs().first(where:) per webview
+        let allTabsMap = Dictionary(uniqueKeysWithValues: tabManager.allTabs().map { ($0.id, $0) })
 
         // Clean up all WebViews for all tabs in all windows
         for (tabId, windowWebViews) in webViewsByTabAndWindow {
-            for (windowId, webView) in windowWebViews {
+            for (_, webView) in windowWebViews {
                 // Use comprehensive cleanup from Tab class
-                if let tab = tabManager.allTabs().first(where: { $0.id == tabId }) {
+                if let tab = allTabsMap[tabId] {
                     tab.cleanupCloneWebView(webView)
                 } else {
                     // Fallback cleanup if tab is not found
@@ -263,16 +260,12 @@ class WebViewCoordinator {
 
                 // Remove from containers
                 removeWebViewFromContainers(webView)
-
-                print("✅ [WebViewCoordinator] Cleaned up WebView for tab \(tabId) in window \(windowId)")
             }
         }
 
         // Clear all tracking
         webViewsByTabAndWindow.removeAll()
         compositorContainerViews.removeAll()
-
-        print("✅ [WebViewCoordinator] Completed comprehensive cleanup for ALL WebViews")
     }
 
     // MARK: - WebView Creation & Cross-Window Sync
@@ -329,8 +322,6 @@ class WebViewCoordinator {
     // MARK: - Private Helpers
 
     private func performFallbackWebViewCleanup(_ webView: WKWebView, tabId: UUID) {
-        print("🧹 [WebViewCoordinator] Performing fallback WebView cleanup for tab: \(tabId)")
-
         // Stop loading
         webView.stopLoading()
 
@@ -364,8 +355,6 @@ class WebViewCoordinator {
 
         // Remove from view hierarchy
         webView.removeFromSuperview()
-
-        print("✅ [WebViewCoordinator] Fallback WebView cleanup completed for tab: \(tabId)")
     }
 
     // MARK: - Cross-Window Sync
@@ -374,7 +363,6 @@ class WebViewCoordinator {
     func syncTab(_ tabId: UUID, to url: URL) {
         // Prevent recursive sync calls
         guard !isSyncingTab.contains(tabId) else {
-            print("🪟 [WebViewCoordinator] Skipping recursive sync for tab \(tabId)")
             return
         }
 
@@ -387,7 +375,6 @@ class WebViewCoordinator {
         for webView in allWebViews {
             // Sync the URL if it's different
             if webView.url != url {
-                print("🔄 [WebViewCoordinator] Syncing tab \(tabId) to URL: \(url)")
                 webView.load(URLRequest(url: url))
             }
         }
@@ -397,7 +384,6 @@ class WebViewCoordinator {
     func reloadTab(_ tabId: UUID) {
         let allWebViews = getAllWebViews(for: tabId)
         for webView in allWebViews {
-            print("🔄 [WebViewCoordinator] Reloading tab \(tabId) across windows")
             webView.reload()
         }
     }
@@ -406,10 +392,9 @@ class WebViewCoordinator {
     func setMuteState(_ muted: Bool, for tabId: UUID, excludingWindow originatingWindowId: UUID?) {
         guard let windowWebViews = webViewsByTabAndWindow[tabId] else { return }
 
-        for (windowId, webView) in windowWebViews {
+        for (_, webView) in windowWebViews {
             // Simple: just set all webviews to the same mute state
             webView.isMuted = muted
-            print("🔇 [WebViewCoordinator] Window \(windowId): muted=\(muted)")
         }
     }
 }
