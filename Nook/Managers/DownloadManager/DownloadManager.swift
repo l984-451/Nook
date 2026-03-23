@@ -420,7 +420,23 @@ private class DownloadDelegate: NSObject, WKDownloadDelegate {
 
     private func decideDestination(response: URLResponse, suggestedFilename: String, completion: @escaping (DestinationDecision) -> Void) {
         let defaultName = suggestedFilename.isEmpty ? "download" : suggestedFilename
-        let cleanName = defaultName.replacingOccurrences(of: "/", with: "_")
+        var cleanName = defaultName
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "\0", with: "")       // Strip null bytes
+        // Strip leading dots to prevent creating hidden files
+        while cleanName.hasPrefix(".") {
+            cleanName = String(cleanName.dropFirst())
+        }
+        if cleanName.isEmpty { cleanName = "download" }
+        // Limit filename length to 255 characters (filesystem maximum)
+        if cleanName.count > 255 {
+            let ext = (cleanName as NSString).pathExtension
+            let base = (cleanName as NSString).deletingPathExtension
+            let maxBase = 255 - (ext.isEmpty ? 0 : ext.count + 1)
+            cleanName = String(base.prefix(maxBase)) + (ext.isEmpty ? "" : ".\(ext)")
+        }
+        // Safety: use lastPathComponent to ensure no directory traversal
+        cleanName = (cleanName as NSString).lastPathComponent
 
         switch download.destinationPreference {
         case .automaticDownloadsFolder:

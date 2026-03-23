@@ -27,12 +27,31 @@ class BrowserToolExecutor {
         BrowserTools.allTools.filter { enabledTools.contains($0.name) }
     }
 
+    /// Callback for requesting user confirmation before executing dangerous tools.
+    /// Set by AIService to route through the standard approval UI.
+    var confirmationHandler: ((_ toolName: String, _ args: [String: Any]) async -> Bool)?
+
     // MARK: - Execute Tool Call
 
     func execute(_ toolCall: AIToolCall) async throws -> AIToolResult {
         guard let browserManager = browserManager,
               let windowState = windowState else {
             return AIToolResult(toolCallId: toolCall.id, toolName: toolCall.name, content: "Browser not available", isError: true)
+        }
+
+        // SECURITY: executeJavaScript ALWAYS requires user confirmation regardless of execution mode,
+        // because it can run arbitrary code on the current page.
+        if toolCall.name == "executeJavaScript" {
+            if let handler = confirmationHandler {
+                let approved = await handler(toolCall.name, toolCall.arguments)
+                if !approved {
+                    Self.log.warning("User denied executeJavaScript execution")
+                    return AIToolResult(toolCallId: toolCall.id, toolName: toolCall.name, content: "User denied execution of executeJavaScript.", isError: true)
+                }
+            } else {
+                Self.log.error("executeJavaScript called without a confirmation handler — denying by default")
+                return AIToolResult(toolCallId: toolCall.id, toolName: toolCall.name, content: "executeJavaScript requires user confirmation but no confirmation handler is available.", isError: true)
+            }
         }
 
         let result: String
