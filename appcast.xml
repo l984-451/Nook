@@ -5,5 +5,15 @@
     <link>https://github.com/l984-451/Nook/releases</link>
     <description>Nook Browser Updates</description>
     <language>en</language>
-  </channel>
+    <item>
+    <title>Version 1.0.7</title>
+    <sparkle:releaseNotesLink>https://github.com/l984-451/Nook/releases/tag/v1.0.7</sparkle:releaseNotesLink>
+    <pubDate>Mon, 23 Mar 2026 17:26:29 +0000</pubDate>
+    <enclosure
+      url="https://github.com/l984-451/Nook/releases/download/v1.0.7/Nook-v1.0.7.dmg"
+      sparkle:version="107"
+      sparkle:shortVersionString="1.0.7"
+      type="application/octet-stream"/>
+  </item>
+</channel>
 </rss>
