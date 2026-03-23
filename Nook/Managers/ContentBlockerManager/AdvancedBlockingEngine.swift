@@ -202,47 +202,81 @@ final class AdvancedBlockingEngine {
 
     // MARK: - Rule Parsing
 
-    /// Parse scriptlet rule: `domain1,domain2#%#//scriptlet("name", "arg1", "arg2")`
-    /// Exception form: `domain1,domain2#@%#//scriptlet("name", "arg1")`
+    /// Parse scriptlet rule in either format:
+    /// - AdGuard:  `domain1,domain2#%#//scriptlet("name", "arg1", "arg2")`
+    /// - uBlock:   `domain1,domain2##+js(scriptlet-name, arg1, arg2)`
+    /// Exception forms: `#@%#//scriptlet(` or `#@#+js(`
     private func parseScriptletRule(_ line: String) -> ParsedScriptletRule? {
         let isException: Bool
-        let separatorRange: Range<String.Index>?
+        let separatorEnd: String.Index
+        let isUBOFormat: Bool
 
+        // Try all four separator patterns (exception variants first — they're longer)
         if let range = line.range(of: "#@%#//scriptlet(") {
             isException = true
-            separatorRange = range
+            separatorEnd = range.upperBound
+            isUBOFormat = false
         } else if let range = line.range(of: "#%#//scriptlet(") {
             isException = false
-            separatorRange = range
+            separatorEnd = range.upperBound
+            isUBOFormat = false
+        } else if let range = line.range(of: "#@#+js(") {
+            isException = true
+            separatorEnd = range.upperBound
+            isUBOFormat = true
+        } else if let range = line.range(of: "##+js(") {
+            isException = false
+            separatorEnd = range.upperBound
+            isUBOFormat = true
         } else {
             return nil
         }
 
-        guard let sepRange = separatorRange else { return nil }
-
-        let domainPart = String(line[line.startIndex..<sepRange.lowerBound])
-        let (permitted, restricted) = parseDomains(domainPart)
-
-        // Extract the scriptlet call: everything between //scriptlet( and the trailing )
-        let afterScriptlet: String
+        // Domain part is everything before the separator
+        let separatorStart: String.Index
         if isException {
-            guard let start = line.range(of: "#@%#//scriptlet(") else { return nil }
-            afterScriptlet = String(line[start.upperBound...])
+            if isUBOFormat {
+                separatorStart = line.range(of: "#@#+js(")!.lowerBound
+            } else {
+                separatorStart = line.range(of: "#@%#//scriptlet(")!.lowerBound
+            }
         } else {
-            guard let start = line.range(of: "#%#//scriptlet(") else { return nil }
-            afterScriptlet = String(line[start.upperBound...])
+            if isUBOFormat {
+                separatorStart = line.range(of: "##+js(")!.lowerBound
+            } else {
+                separatorStart = line.range(of: "#%#//scriptlet(")!.lowerBound
+            }
         }
 
-        // Remove trailing )
-        guard afterScriptlet.hasSuffix(")") else { return nil }
-        let argsString = String(afterScriptlet.dropLast())
+        let domainPart = String(line[line.startIndex..<separatorStart])
+        let (permitted, restricted) = parseDomains(domainPart)
 
-        // Parse comma-separated quoted arguments
-        let args = parseQuotedArgs(argsString)
-        guard !args.isEmpty else { return nil }
+        // Extract everything between the opening ( and the trailing )
+        let afterOpen = String(line[separatorEnd...])
+        guard afterOpen.hasSuffix(")") else { return nil }
+        let argsString = String(afterOpen.dropLast())
 
-        let name = args[0]
-        let scriptletArgs = Array(args.dropFirst())
+        // Parse arguments
+        let args: [String]
+        let name: String
+        let scriptletArgs: [String]
+
+        if isUBOFormat {
+            // uBlock format: ##+js(scriptlet-name, arg1, arg2)
+            // Arguments are comma-separated, NOT quoted (but may have spaces)
+            let parts = argsString.split(separator: ",", maxSplits: .max, omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            guard !parts.isEmpty, !parts[0].isEmpty else { return nil }
+            name = parts[0]
+            scriptletArgs = Array(parts.dropFirst())
+        } else {
+            // AdGuard format: #%#//scriptlet("name", "arg1", "arg2")
+            // Arguments are comma-separated and quoted
+            args = parseQuotedArgs(argsString)
+            guard !args.isEmpty else { return nil }
+            name = args[0]
+            scriptletArgs = Array(args.dropFirst())
+        }
 
         return ParsedScriptletRule(
             name: name,

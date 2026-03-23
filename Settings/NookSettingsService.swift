@@ -337,7 +337,7 @@ class NookSettingsService {
             didFinishOnboardingKey: false,
             tabLayoutKey: TabLayout.sidebar.rawValue,
             appearanceModeKey: AppearanceMode.system.rawValue,
-            tabOrganizerEnabledKey: true,
+            tabOrganizerEnabledKey: false,
             tabOrganizerModelDownloadedKey: false,
             tabOrganizerIdleTimeoutKey: 300.0,
         ])
