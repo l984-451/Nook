@@ -67,9 +67,9 @@ enum TabOrganizationPrompt {
 
         GROUPING rules:
         - Group tabs by topic or purpose, NOT by website
-        - Group names must be 1-3 words
+        - Group names must be 1-5 words
         - A tab can only be in one group
-        - Groups just sort related tabs next to each other. Tabs stay in the same area, they do NOT move to folders or pinned areas
+        - Groups create folders in the tab list. Each group becomes a named folder containing its tabs
 
         RENAME rules:
         - Only rename tabs with ugly titles (long product names, site prefixes, tracking params)

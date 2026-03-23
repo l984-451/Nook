@@ -107,35 +107,18 @@ enum TabOrganizationApplier {
         let preSnapshot = snapshot(tabs: allTabs)
 
         var closedTabs: [TabSnapshot.ClosedTabState] = []
+        var createdFolderIds: [UUID] = []
 
-        // 2. Apply groups — sort tabs so grouped tabs are adjacent
-        // Groups define logical clusters; we sort by placing group members
-        // together in order, with ungrouped tabs at the end
-        if !plan.groups.isEmpty {
-            var orderedIndices: [Int] = []
-            var usedIndices = Set<Int>()
+        // 2. Apply groups — create regular folders and move tabs into them
+        for group in plan.groups where accepted.acceptedGroupIds.contains(group.id) {
+            let folder = tabManager.createRegularFolder(for: spaceId, name: group.name)
+            createdFolderIds.append(folder.id)
+            log.debug("Created regular folder '\(group.name)' for \(group.tabs.count) tabs")
 
-            for group in plan.groups {
-                for tabIndex in group.tabs {
-                    if !usedIndices.contains(tabIndex) {
-                        orderedIndices.append(tabIndex)
-                        usedIndices.insert(tabIndex)
-                    }
-                }
+            for tabIndex in group.tabs {
+                guard let tab = tabMapping[tabIndex] else { continue }
+                tabManager.moveTabToRegularFolder(tab: tab, folderId: folder.id)
             }
-
-            // Append ungrouped tabs at the end in their original order
-            let allIndices = tabMapping.keys.sorted()
-            for idx in allIndices where !usedIndices.contains(idx) {
-                orderedIndices.append(idx)
-            }
-
-            // Apply the ordering
-            for (newIndex, tabPromptIndex) in orderedIndices.enumerated() {
-                guard let tab = tabMapping[tabPromptIndex] else { continue }
-                tab.index = newIndex
-            }
-            log.debug("Applied group-based ordering for \(orderedIndices.count) tabs")
         }
 
         // 3. Apply renames — set displayNameOverride on each tab
@@ -200,7 +183,7 @@ enum TabOrganizationApplier {
 
         return TabSnapshot(
             tabStates: preSnapshot.tabStates,
-            createdFolderIds: [],
+            createdFolderIds: createdFolderIds,
             closedTabs: closedTabs
         )
     }

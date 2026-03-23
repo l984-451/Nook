@@ -15,6 +15,7 @@ struct TabFolderView: View {
     let onDelete: () -> Void
     let onAddTab: () -> Void
     let onActivateTab: (Tab) -> Void
+    var isRegular: Bool = false
 
     @State private var isHovering: Bool = false
     @State private var isFolderIconAnimating: Bool = false
@@ -30,6 +31,9 @@ struct TabFolderView: View {
 
     // Get tabs in this folder
     private var tabsInFolder: [Tab] {
+        if isRegular {
+            return tabManager.regularFolderTabs(for: space.id, folderId: folder.id)
+        }
         let tabs = tabManager.spacePinnedTabs(for: space.id)
             .filter { $0.folderId == folder.id }
             .sorted { $0.index < $1.index }

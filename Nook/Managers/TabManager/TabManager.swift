@@ -59,6 +59,30 @@ import OSLog
         let spaceId: UUID
         let isOpen: Bool
         let index: Int
+        let isRegular: Bool
+
+        init(id: UUID, name: String, icon: String, color: String, spaceId: UUID, isOpen: Bool, index: Int, isRegular: Bool = false) {
+            self.id = id
+            self.name = name
+            self.icon = icon
+            self.color = color
+            self.spaceId = spaceId
+            self.isOpen = isOpen
+            self.index = index
+            self.isRegular = isRegular
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(UUID.self, forKey: .id)
+            name = try container.decode(String.self, forKey: .name)
+            icon = try container.decode(String.self, forKey: .icon)
+            color = try container.decode(String.self, forKey: .color)
+            spaceId = try container.decode(UUID.self, forKey: .spaceId)
+            isOpen = try container.decode(Bool.self, forKey: .isOpen)
+            index = try container.decode(Int.self, forKey: .index)
+            isRegular = try container.decodeIfPresent(Bool.self, forKey: .isRegular) ?? false
+        }
     }
 
     struct SnapshotSpace: Codable {
@@ -251,6 +275,7 @@ import OSLog
             e.spaceId = f.spaceId
             e.isOpen = f.isOpen
             e.index = f.index
+            e.isRegular = f.isRegular
         } else {
             let e = FolderEntity(
                 id: f.id,
@@ -259,7 +284,8 @@ import OSLog
                 color: f.color,
                 spaceId: f.spaceId,
                 isOpen: f.isOpen,
-                index: f.index
+                index: f.index,
+                isRegular: f.isRegular
             )
             ctx.insert(e)
         }
@@ -869,12 +895,16 @@ class TabManager: ObservableObject {
                 let folder = folders[index]
                 print("   Found folder '\(folder.name)' in space \(spaceId.uuidString.prefix(8))...")
 
-                // Move all tabs in folder to space pinned area
+                // Move all tabs out of folder
+                let isRegularFolder = folder.isRegular
                 var movedTabsCount = 0
                 for tab in allTabs() {
                     if tab.folderId == folderId {
                         tab.folderId = nil
-                        tab.isSpacePinned = true
+                        // Only set isSpacePinned for space-pinned folders, not regular ones
+                        if !isRegularFolder {
+                            tab.isSpacePinned = true
+                        }
                         movedTabsCount += 1
                     }
                 }
@@ -908,6 +938,58 @@ class TabManager: ObservableObject {
             }
         }
     }
+
+    // MARK: - Regular Folder Management
+
+    /// Create a folder in the regular tab area (not space-pinned).
+    @discardableResult
+    func createRegularFolder(for spaceId: UUID, name: String) -> TabFolder {
+        let folder = TabFolder(
+            name: name,
+            spaceId: spaceId,
+            color: spaces.first(where: { $0.id == spaceId })?.color ?? .controlAccentColor,
+            isRegular: true
+        )
+
+        var folders = foldersBySpace[spaceId] ?? []
+        folders.append(folder)
+        setFolders(folders, for: spaceId)
+
+        NotificationCenter.default.post(name: .init("TabFoldersDidChange"), object: nil)
+        persistSnapshot()
+        return folder
+    }
+
+    /// Move a regular tab into a regular folder. Does NOT set isSpacePinned.
+    func moveTabToRegularFolder(tab: Tab, folderId: UUID) {
+        tab.folderId = folderId
+        // Tab stays in tabsBySpace — it's still a regular tab, just with a folderId
+        if let spaceId = tab.spaceId {
+            var regularTabs = tabsBySpace[spaceId] ?? []
+            if !regularTabs.contains(where: { $0.id == tab.id }) {
+                regularTabs.append(tab)
+                setTabs(regularTabs, for: spaceId)
+            }
+        }
+    }
+
+    /// Get regular (non-space-pinned) tabs in a specific folder.
+    func regularFolderTabs(for spaceId: UUID, folderId: UUID) -> [Tab] {
+        return (tabsBySpace[spaceId] ?? [])
+            .filter { $0.folderId == folderId }
+            .sorted { $0.index < $1.index }
+    }
+
+    /// Get only loose regular tabs (no folder) for a space.
+    func looseTabs(in space: Space) -> [Tab] {
+        return tabs(in: space).filter { $0.folderId == nil }
+    }
+
+    /// Get regular folders for a space.
+    func regularFolders(for spaceId: UUID) -> [TabFolder] {
+        return (foldersBySpace[spaceId] ?? []).filter { $0.isRegular }
+    }
+
     func moveTabToFolder(tab: Tab, folderId: UUID) {
         let newTab = tab
         removeFromCurrentContainer(newTab)
@@ -2124,7 +2206,7 @@ class TabManager: ObservableObject {
 
             let globalPinned = sortedTabs.filter { $0.isPinned }
             let spacePinned = sortedTabs.filter { $0.isSpacePinned && !$0.isPinned }
-            let normals = sortedTabs.filter { !$0.isPinned && !$0.isSpacePinned && $0.folderId == nil }
+            let normals = sortedTabs.filter { !$0.isPinned && !$0.isSpacePinned }
 
             print("📊 Tab loading statistics:")
             print("   - Total sortedTabs: \(sortedTabs.count)")
@@ -2210,7 +2292,8 @@ class TabManager: ObservableObject {
                     name: e.name,
                     spaceId: resolvedSpaceId,
                     icon: e.icon,
-                    color: NSColor(hex: e.color) ?? .controlAccentColor
+                    color: NSColor(hex: e.color) ?? .controlAccentColor,
+                    isRegular: e.isRegular
                 )
                 folder.isOpen = e.isOpen
                 var folders = foldersBySpace[resolvedSpaceId] ?? []
@@ -2418,7 +2501,8 @@ class TabManager: ObservableObject {
                     color: folder.color.toHexString() ?? "#000000",
                     spaceId: spaceId,
                     isOpen: folder.isOpen,
-                    index: i
+                    index: i,
+                    isRegular: folder.isRegular
                 ))
             }
         }

@@ -484,7 +484,7 @@ struct SpaceView: View {
                     }
                 } : nil,
                 isOrganizing: tabOrganizerManager.isOrganizing,
-                tabCount: tabs.count
+                tabCount: tabs.filter { $0.folderId == nil }.count
             )
             .padding(.horizontal, 8)
             .padding(.top, 4)
@@ -560,7 +560,23 @@ struct SpaceView: View {
 
     private func regularTabsView(currentTabs: [Tab]) -> some View {
         VStack(spacing: 2) {
-            ForEach(Array(currentTabs.enumerated()), id: \.element.id) { index, tab in
+            // Regular folders
+            let regFolders = tabManager.regularFolders(for: space.id)
+            ForEach(regFolders.sorted(by: { $0.index < $1.index })) { folder in
+                TabFolderView(
+                    folder: folder,
+                    space: space,
+                    onDelete: { deleteFolder(folder) },
+                    onAddTab: { addTabToFolder(folder) },
+                    onActivateTab: { onActivateTab($0) },
+                    isRegular: true
+                )
+                .environmentObject(browserManager)
+            }
+
+            // Loose tabs (no folder)
+            let looseTabs = currentTabs.filter { $0.folderId == nil }
+            ForEach(Array(looseTabs.enumerated()), id: \.element.id) { index, tab in
                 regularTabView(tab, index: index)
             }
         }

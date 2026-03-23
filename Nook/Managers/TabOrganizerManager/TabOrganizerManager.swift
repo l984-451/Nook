@@ -78,8 +78,8 @@ final class TabOrganizerManager {
         // Clear any previous error
         error = nil
 
-        // Get unfiled tabs
-        let tabs = tabManager.tabs(in: space)
+        // Get unfiled tabs (loose tabs not already in a folder)
+        let tabs = tabManager.looseTabs(in: space)
 
         // Guard: need at least 3 tabs
         guard tabs.count >= 3 else {

@@ -71,6 +71,7 @@ final class FolderEntity {
     var spaceId: UUID
     var isOpen: Bool
     var index: Int
+    var isRegular: Bool
 
     init(
         id: UUID,
@@ -79,7 +80,8 @@ final class FolderEntity {
         color: String,
         spaceId: UUID,
         isOpen: Bool,
-        index: Int
+        index: Int,
+        isRegular: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -88,6 +90,7 @@ final class FolderEntity {
         self.spaceId = spaceId
         self.isOpen = isOpen
         self.index = index
+        self.isRegular = isRegular
     }
 }
 
