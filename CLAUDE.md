@@ -166,10 +166,8 @@ Per-domain website customization via CSS/JS injection (`Nook/Managers/BoostsMana
 |-------------|---------|
 | `aps-environment: development` | Push notifications (dev) |
 | `autofill-credential-provider` | Password autofill integration |
-| `web-browser.public-key-credential` | WebAuthn/passkey support |
+| `web-browser.public-key-credential` | WebAuthn/passkey support (restricted — requires Apple approval) |
 | `automation.apple-events` | AppleScript support |
-| `device.bluetooth` | Web Bluetooth API |
-| `device.usb` | WebUSB API |
 | `mach-lookup: com.apple.PIPAgent` | Picture-in-Picture |
 
 **Info.plist**: Registers as URL handler for `http`/`https` (LSHandlerRank: Owner). Allows arbitrary loads in web content and local networking. Sparkle auto-updates enabled (daily check, feed at gh-pages/appcast.xml).
