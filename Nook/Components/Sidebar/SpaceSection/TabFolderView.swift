@@ -306,6 +306,14 @@ struct TabFolderView: View {
             Button { browserManager.duplicateCurrentTab() }
             label: { Label("Duplicate Tab", systemImage: "doc.on.doc") }
 
+            if tab.displayNameOverride != nil {
+                Button {
+                    tab.displayNameOverride = nil
+                } label: {
+                    Label("Reset Tab Name", systemImage: "arrow.uturn.backward")
+                }
+            }
+
             Divider()
             // Mute/Unmute option (show if tab has audio content OR is muted)
             if tab.hasAudioContent || tab.isAudioMuted {

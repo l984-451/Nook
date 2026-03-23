@@ -211,6 +211,14 @@ struct SpaceTab: View {
         } label: {
             Label("Rename", systemImage: "character.cursor.ibeam")
         }
+
+        if tab.displayNameOverride != nil {
+            Button {
+                tab.displayNameOverride = nil
+            } label: {
+                Label("Reset Tab Name", systemImage: "arrow.uturn.backward")
+            }
+        }
     }
 
     @ViewBuilder

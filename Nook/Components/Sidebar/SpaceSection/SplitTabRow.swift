@@ -109,6 +109,14 @@ private struct SplitHalfTab: View {
                 }
                 .contextMenu {
                     Button("Close Tab", action: onClose)
+                    if tab.displayNameOverride != nil {
+                        Divider()
+                        Button {
+                            tab.displayNameOverride = nil
+                        } label: {
+                            Label("Reset Tab Name", systemImage: "arrow.uturn.backward")
+                        }
+                    }
                 }
             }
         }

@@ -125,11 +125,13 @@ struct PinnedGrid: View {
                                         urlString: tab.url.absoluteString,
                                         icon: tab.favicon,
                                         isActive: isActive,
+                                        hasDisplayNameOverride: tab.displayNameOverride != nil,
                                         onActivate: { browserManager.selectTab(tab, in: windowState) },
                                         onClose: { browserManager.tabManager.removeTab(tab.id) },
                                         onRemovePin: { browserManager.tabManager.unpinTab(tab) },
                                         onSplitRight: { browserManager.splitManager.enterSplit(with: tab, placeOn: .right, in: windowState) },
-                                        onSplitLeft: { browserManager.splitManager.enterSplit(with: tab, placeOn: .left, in: windowState) }
+                                        onSplitLeft: { browserManager.splitManager.enterSplit(with: tab, placeOn: .left, in: windowState) },
+                                        onResetName: { tab.displayNameOverride = nil }
                                     )
                                     .environmentObject(browserManager)
                                 }
@@ -256,11 +258,13 @@ private struct PinnedTile: View {
     let urlString: String
     let icon: Image
     let isActive: Bool
+    var hasDisplayNameOverride: Bool = false
     let onActivate: () -> Void
     let onClose: () -> Void
     let onRemovePin: () -> Void
     let onSplitRight: () -> Void
     let onSplitLeft: () -> Void
+    var onResetName: (() -> Void)? = nil
 
     var body: some View {
         PinnedTabView(
@@ -279,6 +283,12 @@ private struct PinnedTile: View {
                 Label("Open in Split (Left)", systemImage: "rectangle.split.2x1")
             }
             Divider()
+            if hasDisplayNameOverride, let onResetName {
+                Button(action: onResetName) {
+                    Label("Reset Tab Name", systemImage: "arrow.uturn.backward")
+                }
+                Divider()
+            }
             Button(role: .destructive, action: onClose) {
                 Label("Close tab", systemImage: "xmark")
             }
