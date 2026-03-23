@@ -23,6 +23,7 @@
 		56C82BA92E9C2DB500DDD0D6 /* UniversalGlass in Frameworks */ = {isa = PBXBuildFile; productRef = 56C82BA82E9C2DB500DDD0D6 /* UniversalGlass */; };
 		7FAFC5DA2E3ADDCD009D7DC4 /* FaviconFinder in Frameworks */ = {isa = PBXBuildFile; productRef = 7FAFC5D92E3ADDCD009D7DC4 /* FaviconFinder */; };
 		7FE9E0EB2EE59D3500584E16 /* ColorfulX in Frameworks */ = {isa = PBXBuildFile; productRef = 7FE9E0EA2EE59D3500584E16 /* ColorfulX */; };
+		A1B2C3D62F0E6A0100ABCDEF /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D52F0E6A0100ABCDEF /* MLXLLM */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -134,6 +135,7 @@
 				2D0822D82EC8A61800C302AC /* UniversalGlass in Frameworks */,
 				3600212E2EC6EADB0016A41E /* (null) in Frameworks */,
 				360021332EC6EAEB0016A41E /* (null) in Frameworks */,
+				A1B2C3D62F0E6A0100ABCDEF /* MLXLLM in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -192,6 +194,7 @@
 				360021352EC6EC150016A41E /* Highlightr */,
 				2D0822D72EC8A61800C302AC /* UniversalGlass */,
 				7FE9E0EA2EE59D3500584E16 /* ColorfulX */,
+				A1B2C3D52F0E6A0100ABCDEF /* MLXLLM */,
 			);
 			productName = Pulse;
 			productReference = 7F8340FC2E37F39400674A5D /* Nook.app */;
@@ -228,6 +231,7 @@
 				360021342EC6EC150016A41E /* XCRemoteSwiftPackageReference "Highlightr" */,
 				2D0822D62EC8A61800C302AC /* XCRemoteSwiftPackageReference "universalglass" */,
 				7FE9E0E92EE59D3500584E16 /* XCRemoteSwiftPackageReference "ColorfulX" */,
+				A1B2C3D42F0E6A0100ABCDEF /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 7F8340FD2E37F39400674A5D /* Products */;
@@ -553,6 +557,14 @@
 				minimumVersion = 6.0.2;
 			};
 		};
+		A1B2C3D42F0E6A0100ABCDEF /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.30.6;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -590,6 +602,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 7FE9E0E92EE59D3500584E16 /* XCRemoteSwiftPackageReference "ColorfulX" */;
 			productName = ColorfulX;
+		};
+		A1B2C3D52F0E6A0100ABCDEF /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D42F0E6A0100ABCDEF /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLLM;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -92,7 +92,7 @@ struct SpaceTab: View {
                         }
                         .focused($isTextFieldFocused)
                 } else {
-                    Text(tab.name)
+                    Text(tab.displayName)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(textTab)
                         .lineLimit(1)
@@ -209,6 +209,14 @@ struct SpaceTab: View {
             isTextFieldFocused = true
         } label: {
             Label("Rename", systemImage: "character.cursor.ibeam")
+        }
+
+        if tab.displayNameOverride != nil {
+            Button {
+                tab.displayNameOverride = nil
+            } label: {
+                Label("Reset Tab Name", systemImage: "arrow.uturn.backward")
+            }
         }
     }
 

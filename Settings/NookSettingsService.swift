@@ -48,6 +48,9 @@ class NookSettingsService {
     private let customSearchEnginesKey = "settings.customSearchEngines"
     private let appearanceModeKey = "settings.appearanceMode"
     private let pinnedExtensionIDsKey = "settings.pinnedExtensionIDs"
+    private let tabOrganizerEnabledKey = "settings.tabOrganizerEnabled"
+    private let tabOrganizerModelDownloadedKey = "settings.tabOrganizerModelDownloaded"
+    private let tabOrganizerIdleTimeoutKey = "settings.tabOrganizerIdleTimeout"
 
     var currentSettingsTab: SettingsTabs = .general
 
@@ -288,6 +291,24 @@ class NookSettingsService {
         }
     }
 
+    var tabOrganizerEnabled: Bool {
+        didSet {
+            userDefaults.set(tabOrganizerEnabled, forKey: tabOrganizerEnabledKey)
+        }
+    }
+
+    var tabOrganizerModelDownloaded: Bool {
+        didSet {
+            userDefaults.set(tabOrganizerModelDownloaded, forKey: tabOrganizerModelDownloadedKey)
+        }
+    }
+
+    var tabOrganizerIdleTimeout: TimeInterval {
+        didSet {
+            userDefaults.set(tabOrganizerIdleTimeout, forKey: tabOrganizerIdleTimeoutKey)
+        }
+    }
+
     init() {
         // Register default values
         userDefaults.register(defaults: [
@@ -316,6 +337,9 @@ class NookSettingsService {
             didFinishOnboardingKey: false,
             tabLayoutKey: TabLayout.sidebar.rawValue,
             appearanceModeKey: AppearanceMode.system.rawValue,
+            tabOrganizerEnabledKey: true,
+            tabOrganizerModelDownloadedKey: false,
+            tabOrganizerIdleTimeoutKey: 300.0,
         ])
 
         // Initialize properties from UserDefaults
@@ -395,6 +419,9 @@ class NookSettingsService {
         self.tabLayout = TabLayout(rawValue: userDefaults.string(forKey: tabLayoutKey) ?? TabLayout.sidebar.rawValue) ?? .sidebar
         self.appearanceMode = AppearanceMode(rawValue: userDefaults.string(forKey: appearanceModeKey) ?? AppearanceMode.system.rawValue) ?? .system
         self.didFinishOnboarding = userDefaults.bool(forKey: didFinishOnboardingKey)
+        self.tabOrganizerEnabled = userDefaults.bool(forKey: tabOrganizerEnabledKey)
+        self.tabOrganizerModelDownloaded = userDefaults.bool(forKey: tabOrganizerModelDownloadedKey)
+        self.tabOrganizerIdleTimeout = userDefaults.double(forKey: tabOrganizerIdleTimeoutKey)
 
         if let data = userDefaults.data(forKey: siteSearchEntriesKey),
            let decoded = try? JSONDecoder().decode([SiteSearchEntry].self, from: data) {

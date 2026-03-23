@@ -65,6 +65,16 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     /// The URL pattern that indicates OAuth completion (redirect back to original domain)
     var oauthCompletionURLPattern: String?
 
+    // MARK: - Display Name Override
+    /// User/AI-set display name that persists across page title changes.
+    /// Only set by the tab organizer; cleared by the user via "Reset Tab Name".
+    var displayNameOverride: String? = nil
+
+    /// Display name for sidebar. Prefers user/AI override, falls back to page title.
+    var displayName: String {
+        displayNameOverride ?? name
+    }
+
     // MARK: - Pin State
     var isPinned: Bool = false  // Global pinned (essentials)
     var isSpacePinned: Bool = false  // Space-level pinned
@@ -930,7 +940,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     // MARK: - Rename Methods
     func startRenaming() {
         isRenaming = true
-        editingName = name
+        editingName = displayName
     }
 
     func saveRename() {

@@ -258,7 +258,7 @@ struct TabFolderView: View {
 
     private func folderTabView(_ tab: Tab, index: Int) -> some View {
         NookDragSourceView(
-            item: NookDragItem(tabId: tab.id, title: tab.name, urlString: tab.url.absoluteString),
+            item: NookDragItem(tabId: tab.id, title: tab.displayName, urlString: tab.url.absoluteString),
             tab: tab,
             zoneID: .folder(folder.id),
             index: index,
@@ -312,6 +312,14 @@ struct TabFolderView: View {
 
             Button { browserManager.duplicateCurrentTab() }
             label: { Label("Duplicate Tab", systemImage: "doc.on.doc") }
+
+            if tab.displayNameOverride != nil {
+                Button {
+                    tab.displayNameOverride = nil
+                } label: {
+                    Label("Reset Tab Name", systemImage: "arrow.uturn.backward")
+                }
+            }
 
             Divider()
             // Mute/Unmute option (show if tab has audio content OR is muted)

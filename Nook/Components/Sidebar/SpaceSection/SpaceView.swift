@@ -411,7 +411,7 @@ struct SpaceView: View {
 
     private func pinnedTabView(_ tab: Tab, index: Int) -> some View {
         NookDragSourceView(
-            item: NookDragItem(tabId: tab.id, title: tab.name, urlString: tab.url.absoluteString),
+            item: NookDragItem(tabId: tab.id, title: tab.displayName, urlString: tab.url.absoluteString),
             tab: tab,
             zoneID: .spacePinned(space.id),
             index: index,
@@ -560,7 +560,7 @@ struct SpaceView: View {
 
     private func regularTabView(_ tab: Tab, index: Int) -> some View {
         NookDragSourceView(
-            item: NookDragItem(tabId: tab.id, title: tab.name, urlString: tab.url.absoluteString),
+            item: NookDragItem(tabId: tab.id, title: tab.displayName, urlString: tab.url.absoluteString),
             tab: tab,
             zoneID: .spaceRegular(space.id),
             index: index,

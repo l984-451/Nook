@@ -21,6 +21,9 @@ final class TabEntity {
     var profileId: UUID?
     var folderId: UUID? // Folder membership for tabs within spacepinned area
 
+    // Display name override (user or AI-assigned custom tab name)
+    var displayNameOverride: String?
+
     // Navigation state tracking
     var currentURLString: String? // The actual current page URL (may differ from urlString after navigation)
     var canGoBack: Bool = false
@@ -36,6 +39,7 @@ final class TabEntity {
         spaceId: UUID?,
         profileId: UUID? = nil,
         folderId: UUID? = nil,
+        displayNameOverride: String? = nil,
         currentURLString: String? = nil,
         canGoBack: Bool = false,
         canGoForward: Bool = false
@@ -49,6 +53,7 @@ final class TabEntity {
         self.spaceId = spaceId
         self.profileId = profileId
         self.folderId = folderId
+        self.displayNameOverride = displayNameOverride
 
         // For backward compatibility, if currentURLString is not provided, use urlString
         self.currentURLString = currentURLString ?? urlString

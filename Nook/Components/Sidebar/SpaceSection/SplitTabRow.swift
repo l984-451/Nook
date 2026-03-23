@@ -55,7 +55,7 @@ private struct SplitHalfTab: View {
 
     var body: some View {
         NookDragSourceView(
-            item: NookDragItem(tabId: tab.id, title: tab.name, urlString: tab.url.absoluteString),
+            item: NookDragItem(tabId: tab.id, title: tab.displayName, urlString: tab.url.absoluteString),
             tab: tab,
             zoneID: .spaceRegular(tab.spaceId ?? spaceId),
             index: tab.index,
@@ -69,7 +69,7 @@ private struct SplitHalfTab: View {
                             .scaledToFit()
                             .frame(width: 18, height: 18)
                             .clipShape(RoundedRectangle(cornerRadius: 4))
-                        Text(tab.name)
+                        Text(tab.displayName)
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(textTab)
                             .lineLimit(1)
@@ -109,6 +109,14 @@ private struct SplitHalfTab: View {
                 }
                 .contextMenu {
                     Button("Close Tab", action: onClose)
+                    if tab.displayNameOverride != nil {
+                        Divider()
+                        Button {
+                            tab.displayNameOverride = nil
+                        } label: {
+                            Label("Reset Tab Name", systemImage: "arrow.uturn.backward")
+                        }
+                    }
                 }
             }
         }

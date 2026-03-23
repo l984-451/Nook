@@ -17,6 +17,7 @@ struct WindowView: View {
     @Environment(CommandPalette.self) private var commandPalette
     @Environment(WindowRegistry.self) private var windowRegistry
     @Environment(AIService.self) private var aiService
+    @Environment(TabOrganizerManager.self) private var tabOrganizerManager
     @Environment(\.nookSettings) var nookSettings
     @StateObject private var hoverSidebarManager = HoverSidebarManager()
     @Environment(\.colorScheme) var colorScheme
@@ -139,10 +140,36 @@ struct WindowView: View {
                 windowState.isShowingShortcutConflictToast = false
             }
         }
+        // Handle organize tabs notification from keyboard shortcut manager
+        .onReceive(NotificationCenter.default.publisher(for: .organizeTabsRequested)) { _ in
+            guard windowRegistry.activeWindow?.id == windowState.id else { return }
+            let targetSpace =
+                windowState.currentSpaceId.flatMap { id in
+                    browserManager.tabManager.spaces.first(where: { $0.id == id })
+                } ?? browserManager.tabManager.currentSpace
+            if let space = targetSpace {
+                Task {
+                    await tabOrganizerManager.organizeTabs(
+                        in: space,
+                        using: browserManager.tabManager
+                    )
+                }
+            }
+        }
         .environmentObject(browserManager)
         .environmentObject(browserManager.gradientColorManager)
         .environmentObject(browserManager.splitManager)
         .environmentObject(hoverSidebarManager)
+        .sheet(isPresented: Binding(
+            get: { tabOrganizerManager.showPreview },
+            set: { if !$0 { tabOrganizerManager.dismissPlan() } }
+        )) {
+            TabOrganizerPreviewSheet(
+                spaceId: windowState.currentSpaceId ?? UUID(),
+                tabManager: browserManager.tabManager
+            )
+            .environment(tabOrganizerManager)
+        }
         .preferredColorScheme(resolvedColorScheme)
     }
 
