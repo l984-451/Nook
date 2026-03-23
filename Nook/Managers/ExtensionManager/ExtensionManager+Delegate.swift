@@ -559,7 +559,27 @@ extension ExtensionManager {
                 return
 
             case "readFromClipboard":
-                // Bitwarden may also request clipboard reads via native messaging.
+                // SECURITY: Clipboard read access is restricted to known extensions that
+                // declare clipboard needs (e.g. password managers).
+                let extensionId = extensionContext.uniqueIdentifier
+                let extensionName = extensionContext.webExtension.displayName ?? "Unknown"
+
+                // Allowlist of known extensions that legitimately need clipboard access
+                let knownClipboardExtensions: Set<String> = [
+                    "com.bitwarden.desktop.safari", // Bitwarden Safari
+                    "com.8bit.bitwarden.safari",    // Bitwarden Safari (alt bundle)
+                ]
+
+                let hasClipboardPermission = knownClipboardExtensions.contains(extensionId)
+                    || extensionContext.currentPermissions.contains(where: { String(describing: $0).lowercased().contains("clipboard") })
+
+                if !hasClipboardPermission {
+                    Self.logger.warning("[NativeMessaging] SECURITY: Denying clipboard read from extension '\(extensionName, privacy: .public)' (id: \(extensionId, privacy: .public)) — not in clipboard allowlist")
+                    replyHandler(["text": "", "error": "Clipboard access denied"], nil)
+                    return
+                }
+
+                Self.logger.info("[NativeMessaging] Allowing clipboard read for extension '\(extensionName, privacy: .public)' (id: \(extensionId, privacy: .public))")
                 let text = NSPasteboard.general.string(forType: .string) ?? ""
                 replyHandler(["text": text], nil)
                 return
@@ -951,6 +971,12 @@ extension ExtensionManager {
             }
 
             if let page = pagePath {
+                // SECURITY: Reject paths containing ".." to prevent path traversal attacks
+                if page.contains("..") {
+                    Self.logger.error("[SECURITY] Path traversal detected in options page path: \(page, privacy: .public)")
+                    return nil
+                }
+
                 // Build an extension-scheme URL using the context baseURL
                 let extBase = context.baseURL
                 let optionsURL = extBase.appendingPathComponent(page)
