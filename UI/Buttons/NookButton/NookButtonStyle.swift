@@ -215,28 +215,23 @@ private struct ButtonPreviewSection: View {
     private var buttonStack: some View {
         VStack(spacing: 20) {
             Button("Create Space", systemImage: "plus") {
-                print("Create")
             }
             .buttonStyle(.nookButtonProminent)
             .background(.red)
 
             Button("Cancel") {
-                print("Cancel")
             }
             .buttonStyle(.nookButton)
 
             Button("Delete", systemImage: "trash") {
-                print("Delete")
             }
             .buttonStyle(.nookButton(role: .destructive))
 
             Button("Erase Everything", systemImage: "flame") {
-                print("Erase")
             }
             .buttonStyle(.nookButtonProminent(role: .destructive))
 
             Button("Disabled") {
-                print("Disabled")
             }
             .buttonStyle(.nookButtonProminent)
             .disabled(true)

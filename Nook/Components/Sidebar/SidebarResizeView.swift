@@ -80,7 +80,6 @@ struct SidebarResizeView: View {
 
                             if !isResizing {
                                 guard dragLockManager.startDrag(ownerID: dragSessionID) else {
-                                    print("🚫 [SidebarResizeView] Resize drag blocked - \(dragLockManager.debugInfo)")
                                     return
                                 }
 

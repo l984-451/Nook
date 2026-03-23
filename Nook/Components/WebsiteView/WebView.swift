@@ -71,25 +71,15 @@ extension WebView.Coordinator: WKNavigationDelegate {
         _ webView: WKWebView,
         didStartProvisionalNavigation navigation: WKNavigation!
     ) {
-        #if DEBUG
-        print("Started loading: \(webView.url?.absoluteString ?? "")")
-        #endif
         if let url = webView.url?.absoluteString {
             onURLChange?(url)
         }
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        #if DEBUG
-        print("Content started loading: \(webView.url?.absoluteString ?? "")")
-        #endif
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        #if DEBUG
-        print("Finished loading: \(webView.url?.absoluteString ?? "")")
-        #endif
-
         webView.evaluateJavaScript("document.title") {
             [weak self] result, error in
             if let title = result as? String, !title.isEmpty {
@@ -109,9 +99,6 @@ extension WebView.Coordinator: WKNavigationDelegate {
         didFail navigation: WKNavigation!,
         withError error: Error
     ) {
-        #if DEBUG
-        print("Navigation failed: \(error.localizedDescription)")
-        #endif
     }
 
     func webView(
@@ -119,9 +106,6 @@ extension WebView.Coordinator: WKNavigationDelegate {
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
-        #if DEBUG
-        print("Provisional navigation failed: \(error.localizedDescription)")
-        #endif
     }
 
     func webView(
@@ -242,15 +226,8 @@ extension WebView.Coordinator: WKUIDelegate {
         _ webView: WKWebView,
         enterFullScreenForVideoWith completionHandler: @escaping (Bool, Error?) -> Void
     ) {
-        #if DEBUG
-        print("🎬 [WebView] Entering full-screen for video")
-        #endif
-
         // Get the window containing this webView
         guard let window = webView.window else {
-            #if DEBUG
-            print("❌ [WebView] No window found for full-screen")
-            #endif
             completionHandler(false, NSError(domain: "WebView", code: -1, userInfo: [NSLocalizedDescriptionKey: "No window available for full-screen"]))
             return
         }
@@ -303,36 +280,18 @@ extension WebView.Coordinator: WKUIDelegate {
             if let window = webView.window {
                 // Present as sheet if we have a window
                 openPanel.beginSheetModal(for: window) { response in
-                    #if DEBUG
-                    print("📁 [WebView] Open panel sheet completed with response: \(response)")
-                    #endif
                     if response == .OK {
-                        #if DEBUG
-                        print("📁 [WebView] User selected files: \(openPanel.urls.map { $0.lastPathComponent })")
-                        #endif
                         completionHandler(openPanel.urls)
                     } else {
-                        #if DEBUG
-                        print("📁 [WebView] User cancelled file selection")
-                        #endif
                         completionHandler(nil)
                     }
                 }
             } else {
                 // Fall back to modal presentation
                 openPanel.begin { response in
-                    #if DEBUG
-                    print("📁 [WebView] Open panel modal completed with response: \(response)")
-                    #endif
                     if response == .OK {
-                        #if DEBUG
-                        print("📁 [WebView] User selected files: \(openPanel.urls.map { $0.lastPathComponent })")
-                        #endif
                         completionHandler(openPanel.urls)
                     } else {
-                        #if DEBUG
-                        print("📁 [WebView] User cancelled file selection")
-                        #endif
                         completionHandler(nil)
                     }
                 }

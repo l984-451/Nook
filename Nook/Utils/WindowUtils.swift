@@ -55,8 +55,6 @@ private struct ConditionalWindowDragModifier: ViewModifier {
                                     window.performDrag(with: NSApp.currentEvent!)
                                 }
                             }
-                        } else {
-                            print("🚫 [ConditionalWindowDrag] Blocked - \(dragLockManager.debugInfo)")
                         }
                     }
                     .onEnded { value in
@@ -81,12 +79,7 @@ struct WindowDragGesture: Gesture {
                         if let window = NSApp.keyWindow {
                             window.performDrag(with: NSApp.currentEvent!)
                         }
-                    } else {
-                        print("🚫 [WindowDragGesture] Failed to acquire universal drag lock")
                     }
-                } else {
-                    // Window drag is blocked by another active drag
-                    print("🚫 [WindowDragGesture] Window drag blocked - \(dragLockManager.debugInfo)")
                 }
             }
             .onEnded { value in

@@ -52,7 +52,6 @@ final class WebStoreScriptHandler: NSObject, WKScriptMessageHandler {
                                 contentWorld: .page
                             )
                         } catch {
-                            print("❌ Failed to dispatch install completion event: \(error)")
                         }
                     }
                     

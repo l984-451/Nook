@@ -45,7 +45,6 @@ struct SpaceGradient: Codable, Hashable {
         do {
             return try encoder.encode(self)
         } catch {
-            print("[SpaceGradient] Encoding failed: \(error)")
             return nil
         }
     }

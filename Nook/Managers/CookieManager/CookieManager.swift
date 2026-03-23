@@ -31,7 +31,6 @@ class CookieManager: ObservableObject {
         self.currentProfileId = profileId
         self.cookies = []
         self.domainGroups = []
-        print("🔁 [CookieManager] Switched data store -> profile: \(profileId?.uuidString ?? "nil"), persistent: \(newDataStore.isPersistent)")
         if eagerLoad {
             Task { await self.loadCookies() }
         }
@@ -210,7 +209,6 @@ class CookieManager: ObservableObject {
             totalSize: totalSize
         )
         // Debug diagnostics with profile context
-        print("📊 [CookieManager] Stats for profile=\(currentProfileId?.uuidString ?? "nil"): total=\(stats.total), session=\(stats.session), persistent=\(stats.persistent), expired=\(stats.expired), size=\(stats.totalSize)")
         return stats
     }
     
@@ -240,7 +238,6 @@ extension CookieManager {
             let data = try encoder.encode(cookies)
             return String(data: data, encoding: .utf8) ?? ""
         } catch {
-            print("Error exporting cookies: \(error)")
             return ""
         }
     }

@@ -177,7 +177,6 @@ struct SpacesListItem: View {
 
                         browserManager.dialogManager.closeDialog()
                     } catch {
-                        print("⚠️ Failed to update space \(space.id.uuidString):", error)
                     }
                 },
                 onCancel: {
@@ -233,17 +232,6 @@ struct SpaceListItemButtonStyle: ButtonStyle {
         @unknown default: 32
         }
     }
-    
-//    private var iconSize: CGFloat {
-//        switch controlSize {
-//        case .mini: 12
-//        case .small: 14
-//        case .regular: 16
-//        case .large: 18
-//        case .extraLarge: 20
-//        @unknown default: 16
-//        }
-//    }
     
     private var cornerRadius: CGFloat {
         8

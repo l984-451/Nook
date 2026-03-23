@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import Combine
 
 struct SplitCardView: View {
     var icon: String

@@ -35,7 +35,6 @@ struct BoostsDialog: View {
     return BoostsDialog(
         config: $config,
         onApplyLive: { newConfig in
-            print("Boost config updated: \(newConfig)")
         }
     )
     .padding(40)

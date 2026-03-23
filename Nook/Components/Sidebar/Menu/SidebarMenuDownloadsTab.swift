@@ -202,14 +202,10 @@ struct DownloadItem: View {
 
     private func openFile() {
         guard let destinationURL = download.destinationURL else {
-            print(
-                "No destination URL available for download: \(download.suggestedFilename)"
-            )
             return
         }
 
         guard FileManager.default.fileExists(atPath: destinationURL.path) else {
-            print("File does not exist at path: \(destinationURL.path)")
             return
         }
 
@@ -218,14 +214,10 @@ struct DownloadItem: View {
 
     private func copyFile() {
         guard let destinationURL = download.destinationURL else {
-            print(
-                "No destination URL available for download: \(download.suggestedFilename)"
-            )
             return
         }
 
         guard FileManager.default.fileExists(atPath: destinationURL.path) else {
-            print("File does not exist at path: \(destinationURL.path)")
             return
         }
 
@@ -236,14 +228,10 @@ struct DownloadItem: View {
 
     private func showInFinder() {
         guard let destinationURL = download.destinationURL else {
-            print(
-                "No destination URL available for download: \(download.suggestedFilename)"
-            )
             return
         }
 
         guard FileManager.default.fileExists(atPath: destinationURL.path) else {
-            print("File does not exist at path: \(destinationURL.path)")
             return
         }
 

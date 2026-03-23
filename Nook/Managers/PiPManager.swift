@@ -25,7 +25,6 @@ final class PiPManager: NSObject {
         // PiP only works on tabs that are currently displayed
         let targetWebView = webView ?? tab.assignedWebView
         guard let webView = targetWebView else {
-            print("[PiP] No webView available (tab not displayed)")
             return
         }
         
@@ -65,7 +64,6 @@ final class PiPManager: NSObject {
         
         webView.evaluateJavaScript(pipToggleScript) { result, error in
             if let error = error {
-                print("[PiP] JavaScript error: \(error.localizedDescription)")
                 return
             }
             
@@ -74,10 +72,8 @@ final class PiPManager: NSObject {
                     if let mode = resultDict["mode"] as? String {
                         let isPiPActive = (mode == "picture-in-picture")
                         tab.hasPiPActive = isPiPActive
-                        print("[PiP] Web PiP toggled to: \(mode)")
                     }
                 } else if let errorMsg = resultDict["error"] as? String {
-                    print("[PiP] Web PiP failed: \(errorMsg)")
                 }
             }
         }
@@ -87,14 +83,12 @@ final class PiPManager: NSObject {
         // Use assignedWebView to avoid triggering lazy initialization
         let targetWebView = webView ?? tab.assignedWebView
         guard let webView = targetWebView else { 
-            print("[PiP] No webView available for stopping PiP")
             tab.hasPiPActive = false
             return 
         }
         
         // Check if webView is still valid and can execute JavaScript
         guard webView.navigationDelegate != nil else {
-            print("[PiP] WebView delegate is nil, skipping PiP stop")
             tab.hasPiPActive = false
             return
         }
@@ -119,11 +113,9 @@ final class PiPManager: NSObject {
         
         webView.evaluateJavaScript(stopWebPiPScript) { result, error in
             if let error = error {
-                print("[PiP] Error stopping web PiP: \(error.localizedDescription)")
             } else if let resultDict = result as? [String: Any] {
                 if let success = resultDict["success"] as? Bool, !success {
                     if let errorMsg = resultDict["error"] as? String {
-                        print("[PiP] JavaScript error stopping PiP: \(errorMsg)")
                     }
                 }
             }

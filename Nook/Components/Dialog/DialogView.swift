@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import WebKit
 
 struct DialogView: View {
     @EnvironmentObject var browserManager: BrowserManager

@@ -24,7 +24,6 @@ struct SpaceTab: View {
     var body: some View {
         Button(action: {
             if isCurrentTab {
-                print("🔄 [SpaceTab] Starting rename for tab '\(tab.name)' in window \(windowState.id)")
                 tab.startRenaming()
                 isTextFieldFocused = true
             } else {
@@ -100,7 +99,6 @@ struct SpaceTab: View {
                         .textSelection(.disabled) // Make text non-selectable
                 }
                 Spacer()
-
 
 
                 if isHovering {
