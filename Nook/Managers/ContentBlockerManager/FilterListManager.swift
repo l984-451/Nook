@@ -192,6 +192,25 @@ final class FilterListManager {
         return combined
     }
 
+    /// Load all cached filter lists and return as individual rule lines.
+    /// Used by AdvancedBlockingEngine to parse scriptlet/CSS rules directly from raw text.
+    nonisolated func loadAllFilterRulesAsLines() -> [String] {
+        var allLines: [String] = []
+
+        let enabledFilenames = enabledOptionalFilterListFilenames
+        let optionalLists = Self.optionalLists.filter { enabledFilenames.contains($0.filename) }
+
+        for list in Self.defaultLists + optionalLists {
+            guard let content = loadCachedList(list) else { continue }
+            let lines = content.components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            allLines.append(contentsOf: lines)
+        }
+
+        return allLines
+    }
+
     // MARK: - Private
 
     private nonisolated func loadCachedList(_ list: FilterList) -> String? {
