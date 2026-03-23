@@ -149,23 +149,17 @@ final class ContentBlockerManager {
             await filterListManager.downloadAllLists()
         }
 
-        // Parse filter lists for network/cosmetic rules (WKContentRuleList compilation)
-        let parsed = await Task.detached(priority: .userInitiated) {
-            await self.filterListManager.parseAllCachedLists()
-        }.value
-
-        // Compile network rules + global cosmetic rules into WKContentRuleLists
-        compiledRuleLists = await ContentRuleListCompiler.compile(
-            networkRules: parsed.networkRules,
-            cosmeticRules: parsed.cosmeticRules
-        )
-
-        // Load raw filter text and configure advanced blocking engine
-        // (scriptlet injection via AdGuard corelibs, CSS injection, extended cosmetic rules)
-        let rawRules = await Task.detached(priority: .userInitiated) { [filterListManager] in
+        // Load raw filter text
+        let rules = await Task.detached(priority: .userInitiated) { [filterListManager] in
             filterListManager.loadAllFilterRulesAsLines()
         }.value
-        advancedBlockingEngine.configure(filterRules: rawRules)
+
+        // Compile via SafariConverterLib → WKContentRuleLists + advancedRulesText
+        let result = await ContentRuleListCompiler.compile(rules: rules)
+        compiledRuleLists = result.ruleLists
+
+        // Configure advanced blocking engine with scriptlet/CSS rules
+        advancedBlockingEngine.configure(advancedRulesText: result.advancedRulesText)
 
         isCompiling = false
 
@@ -216,15 +210,10 @@ final class ContentBlockerManager {
         let updated = await filterListManager.downloadAllLists()
 
         if updated {
-            let parsed = filterListManager.parseAllCachedLists()
-
-            compiledRuleLists = await ContentRuleListCompiler.compile(
-                networkRules: parsed.networkRules,
-                cosmeticRules: parsed.cosmeticRules
-            )
-
-            let rawRules = filterListManager.loadAllFilterRulesAsLines()
-            advancedBlockingEngine.configure(filterRules: rawRules)
+            let rules = filterListManager.loadAllFilterRulesAsLines()
+            let result = await ContentRuleListCompiler.compile(rules: rules)
+            compiledRuleLists = result.ruleLists
+            advancedBlockingEngine.configure(advancedRulesText: result.advancedRulesText)
 
             applyToSharedConfiguration()
             applyToExistingWebViews()
@@ -247,20 +236,14 @@ final class ContentBlockerManager {
         // Download any lists we don't have cached yet
         await filterListManager.downloadAllLists()
 
-        // Parse and compile
-        let parsed = await Task.detached(priority: .userInitiated) {
-            self.filterListManager.parseAllCachedLists()
-        }.value
-
-        compiledRuleLists = await ContentRuleListCompiler.compile(
-            networkRules: parsed.networkRules,
-            cosmeticRules: parsed.cosmeticRules
-        )
-
-        let rawRules = await Task.detached(priority: .userInitiated) { [filterListManager] in
+        // Load and compile
+        let rules = await Task.detached(priority: .userInitiated) { [filterListManager] in
             filterListManager.loadAllFilterRulesAsLines()
         }.value
-        advancedBlockingEngine.configure(filterRules: rawRules)
+
+        let result = await ContentRuleListCompiler.compile(rules: rules)
+        compiledRuleLists = result.ruleLists
+        advancedBlockingEngine.configure(advancedRulesText: result.advancedRulesText)
 
         applyToSharedConfiguration()
         applyToExistingWebViews()

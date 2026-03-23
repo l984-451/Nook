@@ -71,50 +71,43 @@ final class AdvancedBlockingEngine {
 
     // MARK: - Configuration
 
-    /// Configure the engine with raw filter list rules.
-    /// Parses scriptlet, CSS injection, and extended cosmetic rules from the raw text.
-    /// Call this after each filter list download/recompile.
-    func configure(filterRules: [String]) {
+    /// Configure the engine with advancedRulesText from SafariConverterLib.
+    /// These are the rules that need JS-based injection (scriptlets, CSS inject, extended CSS).
+    /// SafariConverterLib has already filtered out network rules and simple cosmetic rules.
+    func configure(advancedRulesText: String?) {
         scriptletRules.removeAll()
         cssRules.removeAll()
         cosmeticRules.removeAll()
         scriptletCache.removeAll()
         cssCache.removeAll()
 
-        guard !filterRules.isEmpty else {
-            abLog.info("No filter rules to configure")
+        guard let text = advancedRulesText, !text.isEmpty else {
+            abLog.info("No advanced rules to configure")
             return
         }
 
+        let lines = text.components(separatedBy: "\n")
         var scriptletCount = 0
         var cssCount = 0
         var cosmeticCount = 0
 
-        for line in filterRules {
-            // Skip comments and empty lines
-            if line.isEmpty || line.hasPrefix("!") || line.hasPrefix("[") { continue }
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.hasPrefix("!") { continue }
 
-            // Only parse lines that contain cosmetic/scriptlet separators
-            // (network rules like ||example.com^ don't have ## or #%# or #$#)
-            if let rule = parseScriptletRule(line) {
+            if let rule = parseScriptletRule(trimmed) {
                 scriptletRules.append(rule)
                 scriptletCount += 1
-            } else if let rule = parseCSSInjectionRule(line) {
+            } else if let rule = parseCSSInjectionRule(trimmed) {
                 cssRules.append(rule)
                 cssCount += 1
-            } else if line.contains("##") || line.contains("#?#") || line.contains("#@#") || line.contains("#@?#") {
-                if let rule = parseCosmeticRule(line) {
-                    // Only keep domain-specific cosmetic rules and extended CSS rules
-                    // (global ## rules are already handled by WKContentRuleList css-display-none)
-                    if !rule.permittedDomains.isEmpty || rule.isExtendedCSS || rule.isException {
-                        cosmeticRules.append(rule)
-                        cosmeticCount += 1
-                    }
-                }
+            } else if let rule = parseCosmeticRule(trimmed) {
+                cosmeticRules.append(rule)
+                cosmeticCount += 1
             }
         }
 
-        abLog.info("Advanced blocking configured: \(scriptletCount) scriptlets, \(cssCount) CSS inject, \(cosmeticCount) cosmetic (from \(filterRules.count) total rules)")
+        abLog.info("Advanced blocking configured: \(scriptletCount) scriptlets, \(cssCount) CSS inject, \(cosmeticCount) cosmetic (from \(lines.count) advanced rules)")
     }
 
     // MARK: - Per-Navigation Injection

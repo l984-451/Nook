@@ -157,43 +157,7 @@ final class FilterListManager {
         return anyUpdated
     }
 
-    /// Get the combined parsed result from all cached filter lists.
-    nonisolated func parseAllCachedLists() -> FilterListParser.ParseResult {
-        var combined = FilterListParser.ParseResult()
-
-        // Snapshot enabled optional list filenames (nonisolated(unsafe) property)
-        let enabledFilenames = enabledOptionalFilterListFilenames
-        let optionalLists = Self.optionalLists.filter { enabledFilenames.contains($0.filename) }
-
-        for list in Self.defaultLists {
-            guard let content = loadCachedList(list) else { continue }
-            let parsed = FilterListParser.parse(content)
-            combined.networkRules.append(contentsOf: parsed.networkRules)
-            combined.cosmeticRules.append(contentsOf: parsed.cosmeticRules)
-            combined.scriptletRules.append(contentsOf: parsed.scriptletRules)
-            combined.proceduralCosmeticRules.append(contentsOf: parsed.proceduralCosmeticRules)
-            combined.removeParamRules.append(contentsOf: parsed.removeParamRules)
-            combined.errorCount += parsed.errorCount
-        }
-
-        // Also parse enabled optional lists
-        for list in optionalLists {
-            guard let content = loadCachedList(list) else { continue }
-            let parsed = FilterListParser.parse(content)
-            combined.networkRules.append(contentsOf: parsed.networkRules)
-            combined.cosmeticRules.append(contentsOf: parsed.cosmeticRules)
-            combined.scriptletRules.append(contentsOf: parsed.scriptletRules)
-            combined.proceduralCosmeticRules.append(contentsOf: parsed.proceduralCosmeticRules)
-            combined.removeParamRules.append(contentsOf: parsed.removeParamRules)
-            combined.errorCount += parsed.errorCount
-        }
-
-        print("[FilterListManager] Parsed: \(combined.networkRules.count) network, \(combined.cosmeticRules.count) cosmetic, \(combined.scriptletRules.count) scriptlet, \(combined.proceduralCosmeticRules.count) procedural, \(combined.removeParamRules.count) removeparam rules (\(combined.errorCount) errors)")
-        return combined
-    }
-
-    /// Load all cached filter lists and return as individual rule lines.
-    /// Used by AdvancedBlockingEngine to parse scriptlet/CSS rules directly from raw text.
+    /// Load all cached filter lists and return as individual rule lines for SafariConverterLib.
     nonisolated func loadAllFilterRulesAsLines() -> [String] {
         var allLines: [String] = []
 
