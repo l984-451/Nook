@@ -22,6 +22,7 @@ struct NookApp: App {
     @State private var aiConfigService: AIConfigService
     @State private var mcpManager = MCPManager()
     @State private var aiService: AIService
+    @State private var tabOrganizerManager = TabOrganizerManager()
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     // TEMPORARY: BrowserManager will be phased out as a global singleton.
@@ -54,6 +55,7 @@ struct NookApp: App {
                     .environment(aiConfigService)
                     .environment(mcpManager)
                     .environment(aiService)
+                    .environment(tabOrganizerManager)
                     .onAppear {
                         setupApplicationLifecycle()
                         setupAIServices()
