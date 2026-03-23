@@ -24,8 +24,7 @@ final class ContentRuleListCompiler {
     /// Returns compiled rule lists ready for installation.
     static func compile(
         networkRules: [NetworkRule],
-        cosmeticRules: [CosmeticRule],
-        redirectResourceManager: RedirectResourceManager? = nil
+        cosmeticRules: [CosmeticRule]
     ) async -> [WKContentRuleList] {
         guard let store = WKContentRuleListStore.default() else {
             print("[ContentBlocker] No WKContentRuleListStore available")
@@ -54,7 +53,7 @@ final class ContentRuleListCompiler {
             // Redirect surrogates are handled by scriptlet injection instead.
             if rule.redirectResource != nil { continue }
 
-            if let entry = networkRuleToJSON(rule, redirectResourceManager: redirectResourceManager) {
+            if let entry = networkRuleToJSON(rule) {
                 if rule.isImportant && !rule.isException {
                     importantRules.append(entry)
                 } else if rule.isException {
@@ -71,7 +70,7 @@ final class ContentRuleListCompiler {
         jsonEntries.append(contentsOf: exceptionRules)
         jsonEntries.append(contentsOf: importantRules)
 
-        // Global cosmetic rules (domain-specific cosmetics are handled by ScriptletEngine)
+        // Global cosmetic rules (domain-specific cosmetics are handled by AdvancedBlockingEngine)
         let globalCosmetics = cosmeticRules.filter { $0.domains.isEmpty && !$0.isException }
         let cosmeticBatches = batchCosmeticSelectors(globalCosmetics, batchSize: 500)
         for batch in cosmeticBatches {
@@ -227,7 +226,7 @@ final class ContentRuleListCompiler {
 
     // MARK: - JSON Conversion
 
-    private static func networkRuleToJSON(_ rule: NetworkRule, redirectResourceManager: RedirectResourceManager? = nil) -> [String: Any]? {
+    private static func networkRuleToJSON(_ rule: NetworkRule) -> [String: Any]? {
         // Skip rules with regex patterns unsupported by WebKit's compiler
         if !isRegexSupportedByWebKit(rule.regex) { return nil }
 
@@ -267,7 +266,7 @@ final class ContentRuleListCompiler {
             action = ["type": "ignore-previous-rules"]
         } else {
             // Note: WKContentRuleList doesn't support "redirect" action type.
-            // $redirect rules are handled via scriptlet injection instead (ScriptletEngine).
+            // $redirect rules are handled via scriptlet injection instead.
             // Here we just block the request; the redirect resource manager provides
             // surrogate scripts that are injected separately.
             action = ["type": "block"]

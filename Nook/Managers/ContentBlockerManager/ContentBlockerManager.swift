@@ -2,12 +2,12 @@
 //  ContentBlockerManager.swift
 //  Nook
 //
-//  Orchestrator for native ad blocking. Replaces TrackingProtectionManager.
+//  Orchestrator for native ad blocking.
 //  Manages enable/disable, per-domain whitelist, per-tab disable, OAuth exemption.
 //  Coordinates filter download, compilation, and injection via three layers:
 //  - Network blocking (WKContentRuleList)
 //  - Cosmetic filtering (CSS injection via WKUserScript)
-//  - Scriptlet injection (JS main-world WKUserScript)
+//  - Scriptlet injection (JS main-world WKUserScript via AdGuard Scriptlets corelibs)
 //
 
 import Foundation
@@ -23,9 +23,7 @@ final class ContentBlockerManager {
     private(set) var isCompiling: Bool = false
 
     let filterListManager = FilterListManager()
-    private let scriptletEngine = ScriptletEngine()
-    private let redirectResourceManager = RedirectResourceManager()
-    private var removeParamRules: [RemoveParamRule] = []
+    private let advancedBlockingEngine = AdvancedBlockingEngine()
 
     private var compiledRuleLists: [WKContentRuleList] = []
     private var updateTimer: Timer?
@@ -130,12 +128,9 @@ final class ContentBlockerManager {
         cbLog.info("setEnabled(\(enabled)) — current isEnabled=\(self.isEnabled)")
         guard enabled != isEnabled else { return }
         if !enabled {
-            // Disable immediately
             isEnabled = false
             deactivateBlocking()
         } else {
-            // Enable: don't set isEnabled until activation completes
-            // so setupContentBlockerScripts won't run with empty rules
             Task { @MainActor in
                 await activateBlocking()
                 isEnabled = true
@@ -154,7 +149,7 @@ final class ContentBlockerManager {
             await filterListManager.downloadAllLists()
         }
 
-        // Parse all lists on a background thread to avoid blocking UI
+        // Parse filter lists for network/cosmetic rules (WKContentRuleList compilation)
         let parsed = await Task.detached(priority: .userInitiated) {
             await self.filterListManager.parseAllCachedLists()
         }.value
@@ -162,27 +157,15 @@ final class ContentBlockerManager {
         // Compile network rules + global cosmetic rules into WKContentRuleLists
         compiledRuleLists = await ContentRuleListCompiler.compile(
             networkRules: parsed.networkRules,
-            cosmeticRules: parsed.cosmeticRules,
-            redirectResourceManager: redirectResourceManager
+            cosmeticRules: parsed.cosmeticRules
         )
 
-        // Configure scriptlet engine with scriptlet and domain-specific cosmetic rules
-        scriptletEngine.configure(
-            scriptletRules: parsed.scriptletRules,
-            cosmeticRules: parsed.cosmeticRules,
-            proceduralCosmeticRules: parsed.proceduralCosmeticRules
-        )
-
-        // Store removeparam rules for Swift-layer enforcement
-        removeParamRules = parsed.removeParamRules
-
-        // Log YouTube-specific rule counts for debugging
-        let ytScriptlets = parsed.scriptletRules.filter { $0.domains.contains(where: { $0.contains("youtube") }) }
-        let ytCosmetics = parsed.cosmeticRules.filter { $0.domains.contains(where: { $0.contains("youtube") }) }
-        let fbScriptlets = parsed.scriptletRules.filter { $0.domains.contains(where: { $0.contains("facebook") }) }
-        cbLog.info("YouTube: \(ytScriptlets.count) scriptlet rules, \(ytCosmetics.count) cosmetic rules")
-        cbLog.info("Facebook: \(fbScriptlets.count) scriptlet rules")
-        cbLog.info("Total: \(parsed.scriptletRules.count) scriptlets, \(parsed.networkRules.count) network, \(parsed.cosmeticRules.count) cosmetic")
+        // Load raw filter text and configure advanced blocking engine
+        // (scriptlet injection via AdGuard corelibs, CSS injection, extended cosmetic rules)
+        let rawRules = await Task.detached(priority: .userInitiated) { [filterListManager] in
+            filterListManager.loadAllFilterRulesAsLines()
+        }.value
+        advancedBlockingEngine.configure(filterRules: rawRules)
 
         isCompiling = false
 
@@ -220,7 +203,7 @@ final class ContentBlockerManager {
 
         NotificationCenter.default.post(name: .adBlockerStateChanged, object: nil)
 
-        print("[ContentBlocker] Deactivated")
+        cbLog.info("Deactivated")
     }
 
     // MARK: - Filter List Updates
@@ -237,25 +220,18 @@ final class ContentBlockerManager {
 
             compiledRuleLists = await ContentRuleListCompiler.compile(
                 networkRules: parsed.networkRules,
-                cosmeticRules: parsed.cosmeticRules,
-                redirectResourceManager: redirectResourceManager
+                cosmeticRules: parsed.cosmeticRules
             )
 
-            scriptletEngine.configure(
-                scriptletRules: parsed.scriptletRules,
-                cosmeticRules: parsed.cosmeticRules,
-                proceduralCosmeticRules: parsed.proceduralCosmeticRules
-            )
-
-            removeParamRules = parsed.removeParamRules
+            let rawRules = filterListManager.loadAllFilterRulesAsLines()
+            advancedBlockingEngine.configure(filterRules: rawRules)
 
             applyToSharedConfiguration()
             applyToExistingWebViews()
 
-            // Record update timestamp
             browserManager?.nookSettings?.adBlockerLastUpdate = Date()
 
-            print("[ContentBlocker] Filter lists updated and recompiled")
+            cbLog.info("Filter lists updated and recompiled")
         }
 
         isCompiling = false
@@ -263,33 +239,28 @@ final class ContentBlockerManager {
     }
 
     /// Force recompile all filter lists (e.g. after enabling/disabling an optional list).
-    /// Downloads any missing lists first, then recompiles regardless of whether downloads changed.
     func recompileFilterLists() async {
         guard isEnabled else { return }
 
         isCompiling = true
 
-        // Download any lists we don't have cached yet (e.g. newly enabled optional list)
+        // Download any lists we don't have cached yet
         await filterListManager.downloadAllLists()
 
-        // Always recompile
+        // Parse and compile
         let parsed = await Task.detached(priority: .userInitiated) {
             self.filterListManager.parseAllCachedLists()
         }.value
 
         compiledRuleLists = await ContentRuleListCompiler.compile(
             networkRules: parsed.networkRules,
-            cosmeticRules: parsed.cosmeticRules,
-            redirectResourceManager: redirectResourceManager
+            cosmeticRules: parsed.cosmeticRules
         )
 
-        scriptletEngine.configure(
-            scriptletRules: parsed.scriptletRules,
-            cosmeticRules: parsed.cosmeticRules,
-            proceduralCosmeticRules: parsed.proceduralCosmeticRules
-        )
-
-        removeParamRules = parsed.removeParamRules
+        let rawRules = await Task.detached(priority: .userInitiated) { [filterListManager] in
+            filterListManager.loadAllFilterRulesAsLines()
+        }.value
+        advancedBlockingEngine.configure(filterRules: rawRules)
 
         applyToSharedConfiguration()
         applyToExistingWebViews()
@@ -298,7 +269,7 @@ final class ContentBlockerManager {
         NotificationCenter.default.post(name: .adBlockerStateChanged, object: nil)
 
         isCompiling = false
-        print("[ContentBlocker] Filter lists recompiled")
+        cbLog.info("Filter lists recompiled")
     }
 
     // MARK: - Auto-Update
@@ -327,14 +298,8 @@ final class ContentBlockerManager {
 
     /// Set up content blocker scripts for a navigation. Called from Tab's decidePolicyFor.
     func setupContentBlockerScripts(for url: URL, in webView: WKWebView, tab: Tab) {
-        guard isEnabled else {
-            cbLog.warning("setupScripts: SKIPPED — not enabled")
-            return
-        }
-        guard !isDomainAllowed(url.host) else {
-            cbLog.warning("setupScripts: SKIPPED — domain \(url.host ?? "nil", privacy: .public) is whitelisted")
-            return
-        }
+        guard isEnabled else { return }
+        guard !isDomainAllowed(url.host) else { return }
         guard !isTemporarilyDisabled(tabId: tab.id) else { return }
         guard !tab.isOAuthFlow else { return }
 
@@ -348,40 +313,29 @@ final class ContentBlockerManager {
             remaining.forEach { ucc.addUserScript($0) }
         }
 
-        // Inject scriptlets for this domain (domain-specific + generic/subframe)
-        let scriptlets = scriptletEngine.scriptletUserScripts(for: url)
-        for script in scriptlets {
+        // Inject all advanced blocking scripts (scriptlets + CSS + cosmetic)
+        let scripts = advancedBlockingEngine.userScripts(for: url)
+        for script in scripts {
             ucc.addUserScript(script)
         }
 
-        // Inject domain-specific cosmetic CSS
-        let cosmeticScript = scriptletEngine.cosmeticUserScript(for: url)
-        if let cosmeticScript {
-            ucc.addUserScript(cosmeticScript)
-        }
-
-        // Inject procedural cosmetic filters
-        let proceduralScript = scriptletEngine.proceduralCosmeticUserScript(for: url)
-        if let proceduralScript {
-            ucc.addUserScript(proceduralScript)
-        }
-
         let host = url.host ?? "unknown"
-        cbLog.info("setupScripts for \(host, privacy: .public): \(scriptlets.count) scriptlet scripts, cosmetic=\(cosmeticScript != nil), procedural=\(proceduralScript != nil), ruleLists=\(self.compiledRuleLists.count)")
+        cbLog.info("setupScripts for \(host, privacy: .public): \(scripts.count) advanced scripts, ruleLists=\(self.compiledRuleLists.count)")
     }
 
-    /// Fallback injection after didFinish — re-inject if scripts didn't take.
+    /// Fallback injection after didFinish — re-inject cosmetic CSS if scripts didn't take.
     func injectFallbackScripts(for url: URL, in webView: WKWebView, tab: Tab) {
         guard isEnabled else { return }
         guard !isDomainAllowed(url.host) else { return }
         guard !isTemporarilyDisabled(tabId: tab.id) else { return }
         guard !tab.isOAuthFlow else { return }
 
-        // Re-inject cosmetic CSS via evaluateJavaScript as fallback
-        if let cosmeticScript = scriptletEngine.cosmeticUserScript(for: url) {
-            webView.evaluateJavaScript(cosmeticScript.source) { _, error in
+        // Re-inject CSS/cosmetic scripts as fallback
+        let scripts = advancedBlockingEngine.userScripts(for: url)
+        for script in scripts {
+            webView.evaluateJavaScript(script.source) { _, error in
                 if let error {
-                    print("[ContentBlocker] Fallback cosmetic injection error: \(error.localizedDescription)")
+                    cbLog.warning("Fallback injection error: \(error.localizedDescription, privacy: .public)")
                 }
             }
         }
@@ -390,13 +344,11 @@ final class ContentBlockerManager {
     // MARK: - Rule List Application (for BrowserConfig)
 
     /// Apply compiled rule lists to a WKUserContentController.
-    /// Called from BrowserConfig.freshUserContentController().
     func applyRuleLists(to controller: WKUserContentController) {
         guard isEnabled else { return }
         for list in compiledRuleLists {
             controller.add(list)
         }
-        // Add third-party cookie script
         if !controller.userScripts.contains(where: { $0.source.contains("document.referrer") }) {
             controller.addUserScript(thirdPartyCookieScript)
         }
@@ -478,65 +430,6 @@ final class ContentBlockerManager {
             guard let wv = tab.existingWebView else { continue }
             removeBlocking(from: wv)
         }
-    }
-
-    // MARK: - $removeparam Support
-
-    /// Check if URL has params that should be stripped. Returns cleaned URL if params were removed, nil otherwise.
-    func cleanedURL(for url: URL) -> URL? {
-        guard !removeParamRules.isEmpty else { return nil }
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let queryItems = components.queryItems, !queryItems.isEmpty else { return nil }
-
-        let urlString = url.absoluteString
-        var paramsToRemove: Set<String> = []
-
-        for rule in removeParamRules {
-            guard !rule.isException else { continue }
-
-            // Check if URL matches the rule pattern
-            if let regex = try? NSRegularExpression(pattern: rule.regex),
-               regex.firstMatch(in: urlString, range: NSRange(urlString.startIndex..., in: urlString)) != nil {
-                // This rule applies to this URL
-                if rule.paramPattern == "*" {
-                    // Remove all params
-                    paramsToRemove = Set(queryItems.map { $0.name })
-                    break
-                }
-                // Check each param against the pattern
-                if let paramRegex = try? NSRegularExpression(pattern: rule.paramPattern) {
-                    for item in queryItems {
-                        if paramRegex.firstMatch(in: item.name, range: NSRange(item.name.startIndex..., in: item.name)) != nil {
-                            paramsToRemove.insert(item.name)
-                        }
-                    }
-                } else {
-                    // Exact match
-                    for item in queryItems {
-                        if item.name == rule.paramPattern {
-                            paramsToRemove.insert(item.name)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check exception rules
-        for rule in removeParamRules where rule.isException {
-            if let regex = try? NSRegularExpression(pattern: rule.regex),
-               regex.firstMatch(in: urlString, range: NSRange(urlString.startIndex..., in: urlString)) != nil {
-                if rule.paramPattern == "*" {
-                    return nil  // Exception for all params
-                }
-                paramsToRemove.remove(rule.paramPattern)
-            }
-        }
-
-        guard !paramsToRemove.isEmpty else { return nil }
-
-        let cleaned = queryItems.filter { !paramsToRemove.contains($0.name) }
-        components.queryItems = cleaned.isEmpty ? nil : cleaned
-        return components.url
     }
 
     func refreshFor(tab: Tab) {
