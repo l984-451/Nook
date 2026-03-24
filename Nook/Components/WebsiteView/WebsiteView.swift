@@ -465,7 +465,9 @@ struct TabCompositorWrapper: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let containerView = ContainerView()
         containerView.wantsLayer = true
-        containerView.layer?.backgroundColor = NSColor.clear.cgColor
+        // Use windowBackgroundColor instead of clear to prevent black flashes during
+        // video playback when the WKWebView's GPU compositing layer briefly shows through.
+        containerView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         containerView.postsFrameChangedNotifications = true
 
         // Store reference to container view in WebViewCoordinator

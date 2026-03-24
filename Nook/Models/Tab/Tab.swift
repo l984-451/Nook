@@ -2903,10 +2903,12 @@ extension Tab: WKScriptMessageHandler {
                             v.currentTime = v.duration;
                         }
                         var skip = document.querySelector(
-                            '.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, button[id^="skip-button"]'
+                            '.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, ' +
+                            '.ytp-ad-skip-button-container button, button[id^="skip-button"], ' +
+                            '.ytp-ad-overlay-close-button'
                         );
                         if (skip) skip.click();
-                        var overlay = document.querySelector('.ytp-ad-overlay-container');
+                        var overlay = document.querySelector('.ytp-ad-overlay-container, .ytp-ad-image-overlay');
                         if (overlay) overlay.style.setProperty('display', 'none', 'important');
                     })()
                     """)
