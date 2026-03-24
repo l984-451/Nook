@@ -171,6 +171,17 @@ jobs:
             -srcfolder "Nook.app" \
             -ov -format UDZO "Nook-${VERSION}.dmg"
 
+      - name: Sign DMG for Sparkle
+        env:
+          SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
+        run: |
+          SIGN_OUTPUT=$(echo "$SPARKLE_SIGNING_KEY" | build/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update "Nook-${VERSION}.dmg" --ed-key-file -)
+          # Output is like: sparkle:edSignature="..." length="..."
+          ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
+          DMG_LENGTH=$(echo "$SIGN_OUTPUT" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
+          echo "ED_SIGNATURE=$ED_SIGNATURE" >> $GITHUB_ENV
+          echo "DMG_LENGTH=$DMG_LENGTH" >> $GITHUB_ENV
+
       - name: Create GitHub Release and upload DMG
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -200,6 +211,8 @@ jobs:
                 url="${DMG_URL}"
                 sparkle:version="${BUILD_NUMBER}"
                 sparkle:shortVersionString="${SHORT_VERSION}"
+                sparkle:edSignature="${ED_SIGNATURE}"
+                length="${DMG_LENGTH}"
                 type="application/octet-stream"/>
             </item>
           XMLEOF

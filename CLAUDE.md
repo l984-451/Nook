@@ -9,7 +9,7 @@ Nook is a fast, minimal macOS browser with sidebar-first design. Built with Swif
 - **Minimum macOS**: 15.5 (Tahoe)
 - **Xcode**: 16.4+
 - **Bundle ID**: `com.baingurley.nook`
-- **Current Version**: 1.1.0 (build 110)
+- **Current Version**: 1.1.1 (build 111)
 - **NOT sandboxed** — runs with hardened runtime but no App Sandbox
 
 ## Build & Run
