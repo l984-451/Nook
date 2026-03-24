@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import WebKit
 import SwiftUI
 
 @MainActor

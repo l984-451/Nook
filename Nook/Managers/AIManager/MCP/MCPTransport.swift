@@ -36,6 +36,17 @@ final class StdioTransport: MCPTransportProtocol, @unchecked Sendable {
     }
 
     func start() throws {
+        // SECURITY: Validate that the command path exists and is executable before launching
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: command) else {
+            Self.log.warning("MCP command path does not exist: \(self.command)")
+            throw MCPTransportError.invalidCommandPath
+        }
+        guard fm.isExecutableFile(atPath: command) else {
+            Self.log.warning("MCP command path is not executable: \(self.command)")
+            throw MCPTransportError.invalidCommandPath
+        }
+
         let process = Process()
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -208,6 +219,8 @@ final class SSETransport: MCPTransportProtocol, @unchecked Sendable {
     // Track the receive task for cancellation
     private var receiveTask: Task<Void, Never>?
 
+    /// Maximum allowed size for a single SSE message (10 MB)
+    private static let maxMessageSize = 10 * 1024 * 1024
 
     init(url: String) {
         self.url = url
@@ -279,6 +292,11 @@ final class SSETransport: MCPTransportProtocol, @unchecked Sendable {
                         if line.hasPrefix("data: ") {
                             let dataStr = String(line.dropFirst(6))
                             if let data = dataStr.data(using: .utf8) {
+                                // SECURITY: Discard messages that exceed the maximum size limit
+                                if data.count > SSETransport.maxMessageSize {
+                                    Self.log.warning("SSE message exceeds maximum size limit (\(data.count) bytes > \(SSETransport.maxMessageSize) bytes) — discarding")
+                                    continue
+                                }
                                 continuation.yield(data)
                             }
                         }
@@ -318,6 +336,8 @@ enum MCPTransportError: LocalizedError {
     case invalidURL
     case sendFailed
     case processNotRunning
+    case invalidCommandPath
+    case messageTooLarge
 
     var errorDescription: String? {
         switch self {
@@ -325,6 +345,8 @@ enum MCPTransportError: LocalizedError {
         case .invalidURL: return "Invalid URL"
         case .sendFailed: return "Failed to send message"
         case .processNotRunning: return "Process is not running"
+        case .invalidCommandPath: return "Command path does not exist or is not executable"
+        case .messageTooLarge: return "Message exceeds maximum allowed size"
         }
     }
 }

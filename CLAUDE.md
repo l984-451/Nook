@@ -8,8 +8,8 @@ Nook is a fast, minimal macOS browser with sidebar-first design. Built with Swif
 
 - **Minimum macOS**: 15.5 (Tahoe)
 - **Xcode**: 16.4+
-- **Bundle ID**: `io.browsewithnook.nook`
-- **Current Version**: 1.0.7 (build 107)
+- **Bundle ID**: `com.baingurley.nook`
+- **Current Version**: 1.1.0 (build 110)
 - **NOT sandboxed** — runs with hardened runtime but no App Sandbox
 
 ## Build & Run
@@ -28,7 +28,7 @@ xcodebuild -scheme Nook -configuration Release -arch arm64 -arch x86_64 -derived
 xcodebuild test -scheme Nook
 ```
 
-**Signing**: You must set your personal Development Team in Xcode Signing settings to build locally. CI uses team `96M8ZZRJK6`; local dev uses `9DLM793N9T`.
+**Signing**: You must set your personal Development Team in Xcode Signing settings to build locally. Team ID: `ZHB786H6YN` (Bain Gurley). CI uses team `96M8ZZRJK6`; local dev uses `9DLM793N9T`.
 
 **No SPM resolve needed**: All dependencies are embedded locally or use file-system-synchronized groups. Xcode resolves packages automatically on open.
 
@@ -36,10 +36,9 @@ xcodebuild test -scheme Nook
 
 ## Git Workflow
 
-- **All work branches from `dev`**. PRs must target `dev`, not `main` (enforced by CI).
-- **`main`** is release-only. Merges from `dev` are tagged `v*`, triggering the notarized DMG build.
+- **`main`** is the primary development branch. All work happens here.
+- **`release`** is for releases. Merges from `main` are tagged `v*`, triggering the notarized DMG build.
 - AI assistance must be disclosed per CONTRIBUTING.md.
-- Upstream remote: `https://github.com/nook-browser/Nook.git` (added as `upstream`).
 
 ## Architecture
 
@@ -63,7 +62,6 @@ The app uses ~30 specialized **Managers** for each feature domain, coordinated t
 | Manager | Purpose |
 |---------|---------|
 | **AIManager/** | AI chat: providers (Gemini, OpenRouter, Ollama, OpenAI-compatible), MCP client/server, browser tool execution |
-| **BoostsManager/** | Per-domain CSS/JS injection (brightness, contrast, sepia, tint, custom CSS/JS, font override, zoom) |
 | **DialogManager/** | Modal dialogs: profile creation, space editing, basic auth, settings, import, confirmations |
 | **DownloadManager/** | File downloads via `WKDownloadDelegate` |
 | **DragManager/** | `TabDragManager` (drag container types) and `DragLockManager` (conflict prevention). Legacy system — see DragDrop below |
@@ -88,7 +86,7 @@ The app uses ~30 specialized **Managers** for each feature domain, coordinated t
 ### State Management
 
 - **`@Observable`** (Swift Observation): `Profile`, `Space`, `Tab`, `BrowserWindowState`, `WebViewCoordinator`, `WindowRegistry`, `AIService`
-- **`@Published` / `ObservableObject`** (Combine): `BrowserManager`, `Tab` (dual — uses both patterns), `ExtensionManager`, `NookDragSessionManager`, `PeekManager`, `BoostsManager`
+- **`@Published` / `ObservableObject`** (Combine): `BrowserManager`, `Tab` (dual — uses both patterns, `loadingState` is `@Published`), `ExtensionManager`, `NookDragSessionManager`, `PeekManager`
 - **SwiftData**: `SpaceEntity`, `ProfileEntity`, `TabEntity`, `FolderEntity`, `HistoryEntity`, `ExtensionEntity`, `TabsStateEntity`
 - **UserDefaults**: `NookSettingsService` (all app settings)
 - All state is `@MainActor` confined for thread safety.
@@ -149,14 +147,21 @@ Located in `Nook/Managers/AIManager/`:
 
 Settings stored in `NookSettingsService`: `aiProvider`, API keys per provider, model selection, web search config.
 
-## Boosts System
+## Content Blocker System
 
-Per-domain website customization via CSS/JS injection (`Nook/Managers/BoostsManager/`):
+Located in `Nook/Managers/ContentBlockerManager/`:
 
-- `BoostConfig`: brightness, contrast, sepia, tint color/strength, custom CSS, custom JS, font family, page zoom, text transform
-- Configs stored per normalized domain in UserDefaults
-- `WKUserScript` injection with caching (`scriptCache`)
-- `BoostsWindowManager`: UI for editing boosts
+- **ContentBlockerManager** — Coordinates ad/tracker blocking. Integrates with `AdvancedBlockingEngine` for per-navigation script injection.
+- **AdvancedBlockingEngine** — Loads filter lists (EasyList, etc.), generates `WKContentRuleList` and injectable user scripts (scriptlets, cosmetic filters, site-specific blockers).
+- **Site-specific scripts** in `Resources/`: standalone JS files injected for specific domains (e.g., `facebook-sponsored-blocker.js`).
+
+**Injection flow**: `Tab.decidePolicyFor` → `ContentBlockerManager.setupContentBlockerScripts(for:in:tab:)` → removes old scripts → adds new scripts from `AdvancedBlockingEngine.userScripts(for:)`. Fallback re-injection in `didFinish` via `injectFallbackScripts`.
+
+**Site-specific ad blockers** are registered in `AdvancedBlockingEngine.loadSiteSpecificScripts()` with domain → JS source mappings. Scripts inject at `atDocumentStart` for early detection. New site-specific blockers should:
+- Use `MutationObserver` on `childList` (NOT attributes, to avoid infinite loops from own DOM mutations)
+- Validate content (e.g., check for "Sponsored" text) rather than relying on internal DOM attributes that may be used for non-ad content
+- Use `display: none` to fully collapse hidden elements
+- Guard against double-execution with `window.__nook<Name>Loaded`
 
 ## Entitlements & Security
 
@@ -177,8 +182,10 @@ Per-domain website customization via CSS/JS injection (`Nook/Managers/BoostsMana
 - **Lazy WebView**: `Tab.webView` is lazily initialized on first access. Tabs exist without loaded webviews to save memory. **Important**: When changing the active tab (e.g., after data load), call `loadWebViewIfNeeded()` before refreshing the compositor — the compositor skips unloaded tabs.
 - **Multi-window webviews**: Same tab in multiple windows gets separate webview instances via `WebViewCoordinator`. Primary window owns the "real" webview; others get clones.
 - **Profile data isolation**: Each `Profile` owns a unique `WKWebsiteDataStore`. Ephemeral profiles use `.nonPersistent()` stores destroyed on window close.
-- **Atomic persistence**: `TabManager` uses a Swift `actor` (`PersistenceActor`) for coalesced, atomic snapshot writes with backup recovery.
-- **Favicon cache**: Global LRU cache (200 max) with persistent disk cache; concurrent DispatchQueue with NSLock.
+- **Atomic persistence**: `TabManager` uses a Swift `actor` (`PersistenceActor`) for coalesced, atomic snapshot writes with backup recovery. `persistSnapshot()` is debounced at 100ms via `debouncedPersistSnapshot()` for most mutations; only critical paths (app quit, startup) use immediate persistence.
+- **Tab reattach timing**: `TabManager.reattachBrowserManager()` MUST be synchronous. If async (wrapped in `Task`), tabs won't have `browserManager` set when `setupWindowState` runs, causing webviews to fail creation (profile resolves to nil). This was a critical bug.
+- **Startup tab loading**: `setupWindowState()` → `applyStartupLoadMode()` runs when each window registers via `onWindowRegister`. Always loads the last active tab regardless of startup mode setting. The `.tabManagerDidLoadInitialData` notification fires during `TabManager.init()` before observers exist — do not rely on it.
+- **Favicon cache**: Global LRU cache (200 max) with persistent disk cache at `~/Library/Caches/FaviconCache/{host}.png`. Disk I/O runs on `faviconCacheQueue` (background). Favicons are restored from disk cache during `toRuntime()` for instant display on startup. Network fetches are deferred via `ensureFaviconLoaded()` until the tab becomes visible (`.onAppear`) or active (`loadWebViewIfNeeded`).
 - **File-system-synced groups**: Xcode uses filesystem-synchronized groups (not manual file references) — new files in the directory are automatically included in the build.
 - **WebContent sandbox**: WKWebView's WebContent processes are sandboxed by Apple. They cannot access the system pasteboard, launchservicesd, or RunningBoard. Clipboard operations must route through the app process. The `WebContent[PID]` log messages about sandbox restrictions are normal and not actionable.
 - **WKWebView.configuration returns a copy**: `webView.configuration.preferences.setValue(...)` modifies a discarded copy. Use base config before webview creation, or access `userContentController` (which IS shared).

@@ -80,7 +80,6 @@ struct MiniWindowWebView: NSViewRepresentable {
             webView.evaluateJavaScript(WKWebView.themeColorExtractionScript) { [weak self] result, error in
                 guard let self else { return }
                 if let error {
-                    print("🎨 [MiniWindow] Failed to evaluate theme color script: \(error.localizedDescription)")
                 }
 
                 var hexString = (result as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -208,7 +207,6 @@ struct MiniWindowWebView: NSViewRepresentable {
             guard didLoadInitialURL == false else { return }
             didLoadInitialURL = true
             let request = URLRequest(url: session.currentURL)
-            print("🔐 [MiniWindow] Loading URL: \(session.currentURL.absoluteString)")
             webView.load(request)
         }
         
@@ -239,7 +237,6 @@ struct MiniWindowWebView: NSViewRepresentable {
             if successIndicators.contains(where: { 
                 urlString.contains($0) || query.contains($0) || fragment.contains($0) 
             }) {
-                print("🔐 [MiniWindow] OAuth success detected: \(url.absoluteString)")
                 session.completeAuth(success: true, finalURL: url)
                 return
             }
@@ -248,7 +245,6 @@ struct MiniWindowWebView: NSViewRepresentable {
             if errorIndicators.contains(where: { 
                 urlString.contains($0) || query.contains($0) || fragment.contains($0) 
             }) {
-                print("🔐 [MiniWindow] OAuth error detected: \(url.absoluteString)")
                 session.completeAuth(success: false, finalURL: url)
                 return
             }
@@ -261,7 +257,6 @@ struct MiniWindowWebView: NSViewRepresentable {
                !host.contains("facebook.com") && !host.contains("twitter.com") &&
                !host.contains("discord.com") {
                 // This might be a redirect back to the original app
-                print("🔐 [MiniWindow] Possible OAuth redirect detected: \(url.absoluteString)")
                 session.completeAuth(success: true, finalURL: url)
             }
         }
@@ -275,7 +270,6 @@ struct MiniWindowWebView: NSViewRepresentable {
             let shouldClose = body["shouldClose"] as? Bool ?? false
             let urlString = body["url"] as? String
             
-            print("🔐 [MiniWindow] JavaScript auth completion detected: success=\(success), shouldClose=\(shouldClose), url=\(urlString ?? "nil")")
             
             let finalURL = urlString.flatMap { URL(string: $0) }
             session.completeAuth(success: success, finalURL: finalURL)
@@ -283,7 +277,6 @@ struct MiniWindowWebView: NSViewRepresentable {
             // If the site expects the window to close, we could close it automatically
             // but for now, let's let the user decide when to close/adopt the window
             if shouldClose {
-                print("🔐 [MiniWindow] Site requested window close, but keeping window open for user control")
             }
         }
     }
@@ -293,7 +286,6 @@ struct MiniWindowWebView: NSViewRepresentable {
 @MainActor
 extension MiniWindowWebView.Coordinator: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        print("🔐 [MiniWindow] Navigation started: \(webView.url?.absoluteString ?? "nil")")
         session.updateLoading(isLoading: true)
         session.updateNavigationState(url: webView.url, title: nil)
         session.updateToolbarColor(hexString: nil)
@@ -304,7 +296,6 @@ extension MiniWindowWebView.Coordinator: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        print("🔐 [MiniWindow] Navigation finished: \(webView.url?.absoluteString ?? "nil")")
         session.updateLoading(isLoading: false)
         session.updateNavigationState(url: webView.url, title: nil)
         
@@ -332,12 +323,10 @@ extension MiniWindowWebView.Coordinator: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        print("🔐 [MiniWindow] Navigation failed: \(error.localizedDescription)")
         session.updateLoading(isLoading: false)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        print("🔐 [MiniWindow] Provisional navigation failed: \(error.localizedDescription)")
         session.updateLoading(isLoading: false)
     }
 }
@@ -363,11 +352,9 @@ extension MiniWindowWebView.Coordinator: WKUIDelegate {
         _ webView: WKWebView,
         enterFullScreenForVideoWith completionHandler: @escaping (Bool, Error?) -> Void
     ) {
-        print("🎬 [MiniWindowWebView] Entering full-screen for video")
         
         // Get the window containing this webView
         guard let window = webView.window else {
-            print("❌ [MiniWindowWebView] No window found for full-screen")
             completionHandler(false, NSError(domain: "MiniWindowWebView", code: -1, userInfo: [NSLocalizedDescriptionKey: "No window available for full-screen"]))
             return
         }
@@ -384,11 +371,9 @@ extension MiniWindowWebView.Coordinator: WKUIDelegate {
         _ webView: WKWebView,
         exitFullScreenWith completionHandler: @escaping (Bool, Error?) -> Void
     ) {
-        print("🎬 [MiniWindowWebView] Exiting full-screen for video")
         
         // Get the window containing this webView
         guard let window = webView.window else {
-            print("❌ [MiniWindowWebView] No window found for exiting full-screen")
             completionHandler(false, NSError(domain: "MiniWindowWebView", code: -1, userInfo: [NSLocalizedDescriptionKey: "No window available for exiting full-screen"]))
             return
         }
@@ -412,7 +397,6 @@ extension MiniWindowWebView.Coordinator: WKUIDelegate {
         initiatedByFrame frame: WKFrameInfo,
         decisionHandler: @escaping (WKPermissionDecision) -> Void
     ) {
-        print("🔐 [MiniWindow] Media capture authorization requested for type: \(type.rawValue) from origin: \(origin)")
 
         let knownOAuthDomains = [
             "accounts.google.com", "login.microsoftonline.com", "github.com",
@@ -445,24 +429,18 @@ extension MiniWindowWebView.Coordinator: WKUIDelegate {
             if let window = webView.window {
                 // Present as sheet if we have a window
                 openPanel.beginSheetModal(for: window) { response in
-                    print("📁 [MiniWindowWebView] Open panel sheet completed with response: \(response)")
                     if response == .OK {
-                        print("📁 [MiniWindowWebView] User selected files: \(openPanel.urls.map { $0.lastPathComponent })")
                         completionHandler(openPanel.urls)
                     } else {
-                        print("📁 [MiniWindowWebView] User cancelled file selection")
                         completionHandler(nil)
                     }
                 }
             } else {
                 // Fall back to modal presentation
                 openPanel.begin { response in
-                    print("📁 [MiniWindowWebView] Open panel modal completed with response: \(response)")
                     if response == .OK {
-                        print("📁 [MiniWindowWebView] User selected files: \(openPanel.urls.map { $0.lastPathComponent })")
                         completionHandler(openPanel.urls)
                     } else {
-                        print("📁 [MiniWindowWebView] User cancelled file selection")
                         completionHandler(nil)
                     }
                 }

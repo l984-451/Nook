@@ -142,21 +142,28 @@ final class ContentBlockerManager {
     // MARK: - Activation
 
     private func activateBlocking() async {
+        let startTime = CFAbsoluteTimeGetCurrent()
         isCompiling = true
 
         // Download filter lists if we have none cached
         if !filterListManager.hasCachedLists {
+            cbLog.info("No cached filter lists — downloading")
             await filterListManager.downloadAllLists()
+            cbLog.info("Download completed in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - startTime))s")
         }
 
         // Load raw filter text
+        let loadStart = CFAbsoluteTimeGetCurrent()
         let rules = await Task.detached(priority: .userInitiated) { [filterListManager] in
             filterListManager.loadAllFilterRulesAsLines()
         }.value
+        cbLog.info("Loaded \(rules.count) filter rules in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - loadStart))s")
 
         // Compile via SafariConverterLib → WKContentRuleLists + advancedRulesText
+        let compileStart = CFAbsoluteTimeGetCurrent()
         let result = await ContentRuleListCompiler.compile(rules: rules)
         compiledRuleLists = result.ruleLists
+        cbLog.info("Compile completed in \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - compileStart))s")
 
         // Configure advanced blocking engine with scriptlet/CSS rules
         advancedBlockingEngine.configure(advancedRulesText: result.advancedRulesText)
@@ -183,7 +190,8 @@ final class ContentBlockerManager {
         // Schedule periodic filter list updates
         scheduleAutoUpdate()
 
-        cbLog.info("Activated with \(self.compiledRuleLists.count) rule list(s)")
+        let totalTime = CFAbsoluteTimeGetCurrent() - startTime
+        cbLog.info("Activated with \(self.compiledRuleLists.count) rule list(s) in \(String(format: "%.2f", totalTime))s total")
     }
 
     private func deactivateBlocking() {

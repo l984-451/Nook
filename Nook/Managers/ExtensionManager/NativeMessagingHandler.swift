@@ -189,7 +189,8 @@ class NativeMessagingHandler: NSObject {
                         canonicalPath.hasPrefix(prefix)
                     }
                     if !isInExpectedLocation {
-                        Self.logger.warning("[NativeMessaging] SECURITY: Binary is in an unusual location: \(canonicalPath, privacy: .public) — proceeding with caution")
+                        Self.logger.error("[NativeMessaging] SECURITY: Refusing to launch binary in an unexpected location: \(canonicalPath, privacy: .public)")
+                        continue
                     }
 
                     // 4. Verify the binary path doesn't contain path traversal

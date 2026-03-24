@@ -27,7 +27,6 @@ struct ExtensionUtils {
     /// Show an alert when extensions are not available on older OS versions
     static func showUnsupportedOSAlert() {
         // This will be implemented when we add alert functionality
-        print("Extensions require iOS 18.5+ or macOS 15.5+")
     }
     
     /// Validate a manifest.json file structure

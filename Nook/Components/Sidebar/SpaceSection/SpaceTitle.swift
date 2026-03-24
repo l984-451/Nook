@@ -46,7 +46,6 @@ struct SpaceTitle: View {
                             emojiManager.toggle()
                         }
                         .onChange(of: emojiManager.selectedEmoji) { _, newValue in
-                            print(newValue)
                             space.icon = newValue
                             tabManager.persistSnapshot()
                          }
@@ -58,7 +57,6 @@ struct SpaceTitle: View {
                             emojiManager.toggle()
                         }
                         .onChange(of: emojiManager.selectedEmoji) { _, newValue in
-                            print(newValue)
                             space.icon = newValue
                             tabManager.persistSnapshot()
                          }
@@ -101,7 +99,6 @@ struct SpaceTitle: View {
 
             Spacer()
             
-
 
             Menu {
                 SpaceContextMenu(
@@ -247,7 +244,6 @@ struct SpaceTitle: View {
                     newName: newName
                 )
             } catch {
-                print("⚠️ Failed to rename space \(space.id.uuidString):", error)
             }
         }
         isRenaming = false
@@ -259,7 +255,6 @@ struct SpaceTitle: View {
     }
 
     private func createFolder() {
-        print("🎯 SpaceTitle.createFolder() called for space '\(space.name)' (id: \(space.id.uuidString.prefix(8))...)")
         tabManager.createFolder(for: space.id)
     }
 
@@ -280,7 +275,6 @@ struct SpaceTitle: View {
             }
             browserManager.dialogManager.closeDialog()
         } catch {
-            print("⚠️ Failed to update space \(space.id.uuidString):", error)
         }
     }
 

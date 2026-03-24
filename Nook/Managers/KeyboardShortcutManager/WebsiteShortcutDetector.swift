@@ -62,10 +62,8 @@ class WebsiteShortcutDetector {
         if let url = url {
             let matchedProfile = WebsiteShortcutProfile.knownProfiles.first { $0.matches(url: url) }
             currentProfile = matchedProfile
-            print("⌨️ [Detector] URL updated: \(url.host ?? "nil"), matched profile: \(matchedProfile?.name ?? "none")")
         } else {
             currentProfile = nil
-            print("⌨️ [Detector] URL cleared, no profile")
         }
     }
     
@@ -73,18 +71,13 @@ class WebsiteShortcutDetector {
     /// Returns the website shortcut info if found, nil otherwise
     func isKnownWebsiteShortcut(_ keyCombination: KeyCombination) -> WebsiteShortcut? {
         guard WebsiteShortcutProfile.isFeatureEnabled else { 
-            print("⌨️ [Detector] Feature disabled, not checking shortcuts")
             return nil 
         }
         
-        print("⌨️ [Detector] Checking shortcut: \(keyCombination.lookupKey)")
-        print("⌨️ [Detector] Current URL: \(currentURL?.host ?? "nil")")
-        print("⌨️ [Detector] Current profile: \(currentProfile?.name ?? "nil")")
         
         // Check known profile first
         if let profile = currentProfile,
            let shortcut = profile.hasShortcut(matching: keyCombination) {
-            print("⌨️ [Detector] ✅ Found matching shortcut in profile: \(profile.name)")
             return shortcut
         }
         
@@ -92,12 +85,10 @@ class WebsiteShortcutDetector {
         if let urlKey = currentURL?.absoluteString,
            let detectedKeys = jsDetectedShortcuts[urlKey],
            detectedKeys.contains(keyCombination.lookupKey) {
-            print("⌨️ [Detector] ✅ Found matching shortcut in JS-detected: \(keyCombination.lookupKey)")
             // Return a generic detected shortcut
             return WebsiteShortcut(key: keyCombination.key, modifiers: keyCombination.modifiers, description: nil)
         }
         
-        print("⌨️ [Detector] ❌ No matching shortcut found")
         return nil
     }
     
@@ -110,12 +101,10 @@ class WebsiteShortcutDetector {
         nookActionName: String
     ) -> Bool {
         guard WebsiteShortcutProfile.isFeatureEnabled else { 
-            print("⌨️ [Detector] Feature disabled, not passing through")
             return false 
         }
         
         guard let websiteShortcut = isKnownWebsiteShortcut(keyCombination) else { 
-            print("⌨️ [Detector] No matching website shortcut for: \(keyCombination.lookupKey)")
             return false 
         }
         
@@ -127,14 +116,12 @@ class WebsiteShortcutDetector {
            now.timeIntervalSince(pending.timestamp) <= conflictTimeout {
             // This is the SECOND press within timeout - clear pending and return false
             // so Nook can capture it
-            print("⌨️ [Detector] SECOND press detected - capturing for Nook")
             pendingShortcuts.removeValue(forKey: windowId)
             return false
         }
         
         // This is the FIRST press - set pending state and show toast
         let websiteName = currentProfile?.name ?? "Website"
-        print("⌨️ [Detector] FIRST press - passing to website: \(websiteName)")
         pendingShortcuts[windowId] = PendingShortcut(
             keyCombination: keyCombination,
             timestamp: now,

@@ -361,6 +361,8 @@ extension BrowserManager.ProfileSwitchContext {
 @MainActor
 class BrowserManager: ObservableObject {
     // Legacy global state - kept for backward compatibility during transition
+    /// Tracks which pinned tab tile is hovered (for middle-click → reset to pinned URL)
+    @Published var hoveredPinnedTabId: UUID? = nil
     @Published var sidebarWidth: CGFloat = 250
     @Published var sidebarContentWidth: CGFloat = 234
     @Published var isSidebarVisible: Bool = true
@@ -406,7 +408,6 @@ class BrowserManager: ObservableObject {
     var findManager: FindManager
     var importManager: ImportManager
     var zoomManager = ZoomManager()
-    var boostsManager = BoostsManager()
     var keyboardShortcutManager: KeyboardShortcutManager?
     weak var nookSettings: NookSettingsService?
     weak var aiService: AIService?
@@ -592,90 +593,63 @@ class BrowserManager: ObservableObject {
             }
         }
 
-        // Listen for TabManager initial data load completion to update window states
-        NotificationCenter.default.addObserver(
-            forName: .tabManagerDidLoadInitialData,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleTabManagerDataLoaded()
-            }
-        }
     }
 
     // objectWillChange forwarding removed — TabManager and PeekManager are now
     // injected directly as @EnvironmentObject where needed, so views subscribe
     // to their changes independently instead of cascading through BrowserManager.
     
-    /// Called when TabManager finishes loading initial data from persistence
-    private func handleTabManagerDataLoaded() {
-        print("🔄 [BrowserManager] TabManager data loaded, updating window states")
-        
-        // Update all window states with the loaded data
-        guard let windowRegistry = windowRegistry else { return }
-        
-        for (_, windowState) in windowRegistry.windows {
-            // Set current tab and space from TabManager
-            let activeSpace = tabManager.currentSpace ?? tabManager.spaces.first
-            let activeTab = tabManager.currentTab ?? activeSpace.flatMap { tabManager.tabs(in: $0).first }
-            windowState.currentTabId = activeTab?.id
-            windowState.currentSpaceId = activeSpace?.id
-            
-            // Set gradient from current space
-            if let spaceId = windowState.currentSpaceId,
-                let space = tabManager.spaces.first(where: { $0.id == spaceId })
-            {
-                windowState.currentProfileId = space.profileId ?? currentProfile?.id
-                // Only animate for the active window
-                let isActiveWindow = windowRegistry.activeWindow?.id == windowState.id
-                if isActiveWindow {
-                    gradientColorManager.transition(to: space.gradient, duration: 0.25, animation: .easeInOut(duration: 0.25))
-                } else {
-                    gradientColorManager.setImmediate(space.gradient)
-                }
-            }
-            
-            // Load tabs based on startup mode
-            let startupMode = nookSettings?.startupLoadMode ?? .favoritesAndSpace
+    /// Apply startup tab loading for a newly registered window.
+    /// Sets the window's current tab/space from persisted state and loads tabs
+    /// according to the user's startup mode preference.
+    /// Load tabs according to the user's startup mode preference.
+    /// Always loads the last active tab. Called after windowState is fully configured.
+    private func applyStartupLoadMode(for windowState: BrowserWindowState) {
+        let activeSpace = tabManager.currentSpace ?? tabManager.spaces.first
 
-            switch startupMode {
-            case .nothing:
-                // Don't load any webviews — all tabs start asleep.
-                // Clear currentTabId so EmptyWebsiteView shows.
-                windowState.currentTabId = nil
-            case .favorites:
-                // Load only essential/pinned tabs
-                let essentials = tabManager.essentialTabs(for: windowState.currentProfileId)
-                for tab in essentials where tab.isUnloaded {
-                    tab.loadWebViewIfNeeded()
-                }
-                // Only show active tab if it's a loaded essential
-                if let activeTab, activeTab.isUnloaded {
-                    windowState.currentTabId = nil
-                }
-            case .favoritesAndSpace:
-                // Load active tab + essentials + current space tabs
-                if let activeTab, activeTab.isUnloaded {
-                    activeTab.loadWebViewIfNeeded()
-                }
-                let essentials = tabManager.essentialTabs(for: windowState.currentProfileId)
-                for tab in essentials where tab.isUnloaded {
-                    tab.loadWebViewIfNeeded()
-                }
-                if let space = activeSpace {
-                    let spaceTabs = tabManager.tabs(in: space)
-                    for tab in spaceTabs where tab.isUnloaded {
-                        tab.loadWebViewIfNeeded()
-                    }
-                }
+        // Always load the last active tab so the user sees content immediately.
+        // Try currentTab first, fall back to first tab in active space.
+        let activeTab: Tab? = {
+            if let tab = tabManager.currentTab { return tab }
+            if let tabId = windowState.currentTabId {
+                return tabManager.tabById(tabId) ?? tabManager.allTabs().first(where: { $0.id == tabId })
             }
+            return activeSpace.flatMap { tabManager.tabs(in: $0).first }
+        }()
 
-            // Refresh compositor to show the current tab
-            windowState.refreshCompositor()
+        if let activeTab {
+            windowState.currentTabId = activeTab.id
+            if activeTab.isUnloaded {
+                activeTab.loadWebViewIfNeeded()
+            }
         }
-        
-        print("✅ [BrowserManager] Window states updated with loaded data")
+
+        // Load additional tabs based on startup mode
+        let startupMode = nookSettings?.startupLoadMode ?? .favoritesAndSpace
+
+        switch startupMode {
+        case .nothing:
+            break
+        case .favorites:
+            let essentials = tabManager.essentialTabs(for: windowState.currentProfileId)
+            for tab in essentials where tab.isUnloaded {
+                tab.loadWebViewIfNeeded()
+            }
+        case .favoritesAndSpace:
+            let essentials = tabManager.essentialTabs(for: windowState.currentProfileId)
+            for tab in essentials where tab.isUnloaded {
+                tab.loadWebViewIfNeeded()
+            }
+            if let space = activeSpace {
+                let spaceTabs = tabManager.tabs(in: space)
+                for tab in spaceTabs where tab.isUnloaded {
+                    tab.loadWebViewIfNeeded()
+                }
+            }
+        }
+
+        // Refresh compositor to show the current tab
+        windowState.refreshCompositor()
     }
 
     // MARK: - Profile Switching
@@ -1121,44 +1095,6 @@ class BrowserManager: ObservableObject {
                 }
             )
         }
-    }
-
-    func showBoostsDialog() {
-        guard let currentTab = currentTabForActiveWindow(),
-            let domain = currentTab.url.host,
-            let activeWindow = windowRegistry?.activeWindow,
-            let webView = getWebView(for: currentTab.id, in: activeWindow.id)
-        else {
-            dialogManager.showDialog {
-                StandardDialog(
-                    header: {
-                        DialogHeader(
-                            icon: "bolt.circle",
-                            title: "No Website Available",
-                            subtitle: "Navigate to a website to create a boost."
-                        )
-                    },
-                    content: {
-                        Color.clear.frame(height: 0)
-                    },
-                    footer: {
-                        DialogFooter(rightButtons: [
-                            DialogButton(text: "OK", variant: .primary) { [weak self] in
-                                self?.closeDialog()
-                            }
-                        ])
-                    }
-                )
-            }
-            return
-        }
-
-        // Show the boost window
-        BoostsWindowManager.shared.show(
-            for: webView,
-            domain: domain,
-            boostsManager: boostsManager
-        )
     }
 
     func closeDialog() {
@@ -1904,28 +1840,22 @@ class BrowserManager: ObservableObject {
         windowState.urlBarFrame = urlBarFrame
         windowState.currentProfileId = currentProfile?.id
 
-        // Set initial space and tab (respect startup load mode)
+        // Always set the current space and last active tab
         windowState.currentSpaceId = tabManager.currentSpace?.id
-        let startupMode = nookSettings?.startupLoadMode ?? .favoritesAndSpace
-        if startupMode == .nothing {
-            windowState.currentTabId = nil
-        } else {
-            windowState.currentTabId = tabManager.currentTab?.id
-        }
-        
+        windowState.currentTabId = tabManager.currentTab?.id
+
         // Set gradient from current space immediately to avoid showing default blue
         if let spaceId = windowState.currentSpaceId,
             let space = tabManager.spaces.first(where: { $0.id == spaceId })
         {
             windowState.currentProfileId = space.profileId ?? currentProfile?.id
-            // Set gradient immediately without animation
             gradientColorManager.setImmediate(space.gradient)
         } else {
-            // Fallback to default gradient if no space exists
             gradientColorManager.setImmediate(.default)
         }
 
-        print("🪟 [BrowserManager] Setup window state: \(windowState.id), currentTab: \(windowState.currentTabId?.uuidString ?? "none"), currentSpace: \(windowState.currentSpaceId?.uuidString ?? "none")")
+        // Apply startup tab loading mode
+        applyStartupLoadMode(for: windowState)
     }
 
 

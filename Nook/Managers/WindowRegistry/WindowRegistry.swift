@@ -46,7 +46,6 @@ class WindowRegistry {
     func register(_ window: BrowserWindowState) {
         windows[window.id] = window
         onWindowRegister?(window)
-        print("🪟 [WindowRegistry] Registered window: \(window.id)")
     }
 
     /// Unregister a window when it closes
@@ -61,14 +60,12 @@ class WindowRegistry {
             activeWindowId = windows.keys.first
         }
 
-        print("🪟 [WindowRegistry] Unregistered window: \(id)")
     }
 
     /// Set the active (focused) window
     func setActive(_ window: BrowserWindowState) {
         activeWindowId = window.id
         onActiveWindowChange?(window)
-        print("🪟 [WindowRegistry] Active window: \(window.id)")
     }
 
     /// Get all windows as an array

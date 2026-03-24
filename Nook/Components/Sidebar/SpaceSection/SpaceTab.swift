@@ -24,7 +24,6 @@ struct SpaceTab: View {
     var body: some View {
         Button(action: {
             if isCurrentTab {
-                print("🔄 [SpaceTab] Starting rename for tab '\(tab.name)' in window \(windowState.id)")
                 tab.startRenaming()
                 isTextFieldFocused = true
             } else {
@@ -35,21 +34,12 @@ struct SpaceTab: View {
             }
         }) {
             HStack(spacing: 8) {
-                ZStack {
-                    tab.favicon
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 18, height: 18)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .opacity(tab.isUnloaded ? 0.5 : 1.0)
-                    
-                    if tab.isUnloaded {
-                        Image(systemName: "moon.fill")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                            .offset(x: 6, y: -6)
-                    }
-                }
+                tab.favicon
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 18, height: 18)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .opacity(tab.isUnloaded ? 0.5 : 1.0)
                 if tab.hasAudioContent || tab.hasPlayingAudio || tab.isAudioMuted {
                     Button(action: {
                         onMute()
@@ -102,7 +92,6 @@ struct SpaceTab: View {
                 Spacer()
 
 
-
                 if isHovering {
                     Button(action: onClose) {
                         Image(systemName: "xmark")
@@ -147,6 +136,9 @@ struct SpaceTab: View {
             Options()
         }
         .shadow(color: isActive ? shadowColor : Color.clear, radius: isActive ? 2 : 0, y: 1.5)
+        .onAppear {
+            tab.ensureFaviconLoaded()
+        }
     }
     
     @ViewBuilder
@@ -216,6 +208,35 @@ struct SpaceTab: View {
                 tab.displayNameOverride = nil
             } label: {
                 Label("Reset Tab Name", systemImage: "arrow.uturn.backward")
+            }
+        }
+
+        if (tab.isPinned || tab.isSpacePinned), tab.hasNavigatedAwayFromPinnedURL {
+            Button {
+                tab.resetToPinnedURL()
+            } label: {
+                Label("Reset to Pinned URL", systemImage: "arrow.uturn.backward.circle")
+            }
+        }
+
+        if (tab.isPinned || tab.isSpacePinned), tab.pinnedURL != nil {
+            Button {
+                browserManager.dialogManager.showDialog(
+                    EditPinnedURLDialog(
+                        tab: tab,
+                        onSave: { newURL in
+                            tab.pinnedURL = newURL
+                            tab.loadURL(newURL)
+                            browserManager.dialogManager.closeDialog()
+                            tabManager.debouncedPersistSnapshot()
+                        },
+                        onCancel: {
+                            browserManager.dialogManager.closeDialog()
+                        }
+                    )
+                )
+            } label: {
+                Label("Edit Pinned URL", systemImage: "pencil.circle")
             }
         }
     }

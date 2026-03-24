@@ -11,7 +11,6 @@ import Carbon
 import OSLog
 import Sparkle
 import SwiftUI
-import WebKit
 
 @main
 struct NookApp: App {
@@ -163,6 +162,11 @@ struct NookApp: App {
         windowRegistry.onWindowRegister = { [weak browserManager] windowState in
             browserManager?.setupWindowState(windowState)
         }
+        // Retroactively set up any windows that registered before this callback was set
+        // (child .onAppear fires before parent .onAppear in SwiftUI)
+        for (_, windowState) in windowRegistry.windows {
+            browserManager.setupWindowState(windowState)
+        }
 
         windowRegistry.onWindowClose = {
             [webViewCoordinator, weak browserManager] windowId in
@@ -185,9 +189,6 @@ struct NookApp: App {
                 // BrowserManager was deallocated - perform minimal cleanup
                 // Remove compositor container view to prevent leaks
                 webViewCoordinator.removeCompositorContainerView(for: windowId)
-                print(
-                    "⚠️ [NookApp] Window \(windowId) closed after BrowserManager deallocation - performed minimal cleanup"
-                )
             }
         }
 

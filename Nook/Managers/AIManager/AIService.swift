@@ -281,6 +281,21 @@ class AIService {
                 }
             }
 
+            // SECURITY: Wire confirmation handler so executeJavaScript always prompts,
+            // even when the overall execution mode is .auto
+            browserToolExecutor.confirmationHandler = { [weak self] toolName, args in
+                guard let self else { return false }
+                if self.autoApprovedThisChat { return true }
+                let approval = await self.requestToolApproval(toolName: toolName, args: args)
+                switch approval {
+                case .allow: return true
+                case .allowAll:
+                    self.autoApprovedThisChat = true
+                    return true
+                case .deny: return false
+                }
+            }
+
             do {
                 return try await browserToolExecutor.execute(toolCall)
             } catch {

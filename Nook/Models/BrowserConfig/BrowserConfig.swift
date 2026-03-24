@@ -39,23 +39,14 @@ class BrowserConfiguration {
         
         // Enable Picture-in-Picture for web media
         config.preferences.setValue(true, forKey: "allowsPictureInPictureMediaPlayback")
-        
-        // Enable full-screen API support
+
+        // Enable full-screen API support and media devices
         config.preferences.setValue(true, forKey: "allowsInlineMediaPlayback")
         config.preferences.setValue(true, forKey: "mediaDevicesEnabled")
-        
+
         // CRITICAL: Enable HTML5 Fullscreen API
         config.preferences.isElementFullscreenEnabled = true
-        
-        
-        // Enable full-screen API support
-        config.preferences.setValue(true, forKey: "allowsInlineMediaPlayback")
-        config.preferences.setValue(true, forKey: "mediaDevicesEnabled")
-        
-        // CRITICAL: Enable HTML5 Fullscreen API
-        config.preferences.isElementFullscreenEnabled = true
-        
-        
+
         // Enable background media playback
         config.allowsAirPlayForMediaPlayback = true
         
@@ -113,15 +104,10 @@ class BrowserConfiguration {
         return config
     }
 
-    // Returns a profile-scoped configuration with cache/perf optimizations applied
+    // Returns a profile-scoped configuration with cache/perf optimizations applied.
+    // Media and PiP preferences are inherited from the base webViewConfiguration via .copy().
     func cacheOptimizedWebViewConfiguration(for profile: Profile) -> WKWebViewConfiguration {
-        let config = webViewConfiguration(for: profile)
-        // Enable aggressive caching and media capabilities (mirror default optimized config)
-        config.preferences.setValue(true, forKey: "allowsInlineMediaPlayback")
-        config.preferences.setValue(true, forKey: "mediaDevicesEnabled")
-        config.preferences.setValue(true, forKey: "allowsPictureInPictureMediaPlayback")
-        
-        return config
+        return webViewConfiguration(for: profile)
     }
 
     // MARK: - Chrome Web Store Integration

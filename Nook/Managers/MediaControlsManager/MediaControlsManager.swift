@@ -121,12 +121,7 @@ final class MediaControlsManager {
                     break
                 }
             } catch {
-                print("❌ [MediaControls] Failed to \(description): \(error)")
             }
-        }
-
-        if !handled {
-            print("❌ [MediaControls] No web view handled \(description)")
         }
 
         return (handled, payload)
@@ -297,7 +292,6 @@ final class MediaControlsManager {
                     return boolResult
                 }
             } catch {
-                print("❌ [MediaControls] Failed to get playback state: \(error)")
             }
         }
 

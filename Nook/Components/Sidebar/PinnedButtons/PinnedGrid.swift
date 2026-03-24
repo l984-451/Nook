@@ -131,9 +131,30 @@ struct PinnedGrid: View {
                                             onRemovePin: { tabManager.unpinTab(tab) },
                                             onSplitRight: { browserManager.splitManager.enterSplit(with: tab, placeOn: .right, in: windowState) },
                                             onSplitLeft: { browserManager.splitManager.enterSplit(with: tab, placeOn: .left, in: windowState) },
-                                            onResetName: { tab.displayNameOverride = nil }
+                                            onResetName: { tab.displayNameOverride = nil },
+                                            onResetURL: { tab.resetToPinnedURL() },
+                                            onEditPinnedURL: {
+                                                browserManager.dialogManager.showDialog(
+                                                    EditPinnedURLDialog(
+                                                        tab: tab,
+                                                        onSave: { newURL in
+                                                            tab.pinnedURL = newURL
+                                                            tab.loadURL(newURL)
+                                                            browserManager.dialogManager.closeDialog()
+                                                            tabManager.debouncedPersistSnapshot()
+                                                        },
+                                                        onCancel: {
+                                                            browserManager.dialogManager.closeDialog()
+                                                        }
+                                                    )
+                                                )
+                                            },
+                                            hasNavigatedAway: tab.hasNavigatedAwayFromPinnedURL
                                         )
                                         .environmentObject(browserManager)
+                                        .onHover { hovering in
+                                            browserManager.hoveredPinnedTabId = hovering ? tab.id : nil
+                                        }
                                     }
                                     .opacity(isDraggedItem ? 0.0 : 1.0)
                                 }
@@ -272,6 +293,9 @@ private struct PinnedTile: View {
     let onSplitRight: () -> Void
     let onSplitLeft: () -> Void
     var onResetName: (() -> Void)? = nil
+    var onResetURL: (() -> Void)? = nil
+    var onEditPinnedURL: (() -> Void)? = nil
+    var hasNavigatedAway: Bool = false
 
     var body: some View {
         PinnedTabView(
@@ -295,8 +319,18 @@ private struct PinnedTile: View {
                 Button(action: onResetName) {
                     Label("Reset Tab Name", systemImage: "arrow.uturn.backward")
                 }
-                Divider()
             }
+            if hasNavigatedAway, let onResetURL {
+                Button(action: onResetURL) {
+                    Label("Reset to Pinned URL", systemImage: "arrow.uturn.backward.circle")
+                }
+            }
+            if let onEditPinnedURL {
+                Button(action: onEditPinnedURL) {
+                    Label("Edit Pinned URL", systemImage: "pencil.circle")
+                }
+            }
+            Divider()
             Button(role: .destructive, action: onClose) {
                 Label("Close tab", systemImage: "xmark")
             }

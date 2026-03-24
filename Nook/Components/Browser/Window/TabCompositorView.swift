@@ -99,10 +99,6 @@ class TabCompositorManager: ObservableObject {
     }
 
     func unloadTab(_ tab: Tab) {
-        #if DEBUG
-        print("🔄 [Compositor] Unloading tab: \(tab.name)")
-        #endif
-
         unloadTimers[tab.id]?.invalidate()
         unloadTimers.removeValue(forKey: tab.id)
         lastAccessTimes.removeValue(forKey: tab.id)
@@ -111,10 +107,6 @@ class TabCompositorManager: ObservableObject {
     }
 
     func loadTab(_ tab: Tab) {
-        #if DEBUG
-        print("🔄 [Compositor] Loading tab: \(tab.name)")
-        #endif
-
         markTabAccessed(tab.id)
         tab.loadWebViewIfNeeded()
 
@@ -234,10 +226,6 @@ class TabCompositorManager: ObservableObject {
             tabsToUnload = sorted.prefix(countToUnload)
         }
 
-        #if DEBUG
-        print("⚠️ [Compositor] Memory pressure — unloading \(tabsToUnload.count) of \(loadedNonExempt.count) tabs (mode: \(mode.displayName))")
-        #endif
-
         for tab in tabsToUnload {
             browserManager.tabManager.unloadTab(tab)
         }
@@ -284,9 +272,6 @@ class TabCompositorManager: ObservableObject {
             unloadCount += 1
         }
 
-        #if DEBUG
-        print("🌙 [Compositor] App backgrounded — unloaded \(unloadCount) tabs (kept \(currentTabIds.count) active window tabs)")
-        #endif
     }
 
     // MARK: - Max Loaded Tab Enforcement
@@ -314,12 +299,6 @@ class TabCompositorManager: ObservableObject {
         let sorted = eligible.sorted { tabImportanceScore($0) < tabImportanceScore($1) }
         let countToUnload = loadedRegular.count - maxTabs
         let tabsToUnload = sorted.prefix(max(0, countToUnload))
-
-        #if DEBUG
-        if !tabsToUnload.isEmpty {
-            print("📊 [Compositor] Max tab limit (\(maxTabs)) — unloading \(tabsToUnload.count) tabs")
-        }
-        #endif
 
         for tab in tabsToUnload {
             browserManager.tabManager.unloadTab(tab)

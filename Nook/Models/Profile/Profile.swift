@@ -71,7 +71,6 @@ final class Profile: NSObject, Identifiable {
             dataStore: .nonPersistent()
         )
         profile.isEphemeral = true
-        print("🔒 [Profile] Created ephemeral incognito profile: \(profile.id)")
         return profile
     }
 
@@ -83,16 +82,10 @@ final class Profile: NSObject, Identifiable {
         // Prefer a persistent store identified by the profile UUID when available
         if #available(macOS 15.4, *) {
             let store = WKWebsiteDataStore(forIdentifier: profileId)
-            if !store.isPersistent {
-                print("⚠️ [Profile] Created data store is not persistent for profile: \(profileId.uuidString)")
-            } else {
-                print("✅ [Profile] Using persistent data store for profile \(profileId.uuidString) — id: \(store.identifier?.uuidString ?? "nil")")
-            }
             return store
         } else {
             // Fallback: use default shared store on older systems
             let store = WKWebsiteDataStore.default()
-            print("ℹ️ [Profile] Using default website data store (no per-profile stores on this OS)")
             return store
         }
     }
@@ -156,12 +149,9 @@ final class Profile: NSObject, Identifiable {
     /// - Parameter completion: Optional completion handler called when destruction is complete
     func destroyEphemeralDataStore(completion: (() -> Void)? = nil) {
         guard isEphemeral else {
-            print("⚠️ [Profile] Cannot destroy data store: profile is not ephemeral")
             completion?()
             return
         }
-        
-        print("🔒 [Profile] Destroying ephemeral data store for profile: \(id)")
         
         let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
         
@@ -178,7 +168,6 @@ final class Profile: NSObject, Identifiable {
                     self.dataStore.httpCookieStore.delete(cookie)
                 }
                 
-                print("🔒 [Profile] Ephemeral data store destroyed for profile: \(self.id)")
                 completion?()
             }
         }

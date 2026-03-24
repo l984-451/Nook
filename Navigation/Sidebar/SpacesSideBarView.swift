@@ -34,7 +34,6 @@ struct SpacesSideBarView: View {
         sidebarContent
             .contentShape(Rectangle())
             .onHover { state in
-                print("hovering: \(state)")
                 isSidebarHovered = state
             }
             .contextMenu {
@@ -313,12 +312,10 @@ struct SpacesSideBarView: View {
 
     private func handleSpaceIndexChange(_ newIndex: Int, spaces: [Space]) {
         guard newIndex >= 0 && newIndex < spaces.count else {
-            print("⚠️ Invalid space index: \(newIndex), spaces count: \(spaces.count)")
             return
         }
 
         let space = spaces[newIndex]
-        print("🎯 Page changed to space: \(space.name) (index: \(newIndex))")
 
         // Trigger haptic feedback
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
@@ -415,7 +412,6 @@ struct SpacesSideBarView: View {
 
                         browserManager.dialogManager.closeDialog()
                     } catch {
-                        print("⚠️ Failed to update space \(spaceId.uuidString):", error)
                     }
                 },
                 onCancel: {
