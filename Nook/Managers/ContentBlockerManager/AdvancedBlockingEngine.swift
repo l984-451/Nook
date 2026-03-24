@@ -65,8 +65,12 @@ final class AdvancedBlockingEngine {
     private var scriptletCache: [String: String] = [:]
     private var cssCache: [String: String] = [:]
 
+    /// Site-specific blocker scripts loaded from bundle (domain → JS source)
+    private var siteSpecificScripts: [String: String] = [:]
+
     init() {
         loadScriptletLibrary()
+        loadSiteSpecificScripts()
     }
 
     // MARK: - Configuration
@@ -163,6 +167,19 @@ final class AdvancedBlockingEngine {
             ))
         }
 
+        // Site-specific blocker scripts (e.g., Facebook sponsored post detection)
+        if let siteJS = siteSpecificScript(for: host) {
+            let markedJS = "// Nook Content Blocker\n" + siteJS
+            scripts.append(WKUserScript(
+                source: markedJS,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            ))
+            abLog.info("Injecting site-specific script for \(host, privacy: .public)")
+        }
+
+        abLog.info("userScripts for \(host, privacy: .public): \(scripts.count) total (scriptlet=\(!scriptletJS.isEmpty), generic=\(!genericScriptletJS.isEmpty), css=\(!cssJS.isEmpty), cosmetic=\(!cosmeticJS.isEmpty), site=\(self.siteSpecificScript(for: host) != nil))")
+
         return scripts
     }
 
@@ -191,6 +208,37 @@ final class AdvancedBlockingEngine {
         }
 
         abLog.info("Loaded \(self.scriptletLibrary.count) scriptlet aliases from AdGuard corelibs")
+    }
+
+    /// Load site-specific blocker scripts from Resources/.
+    private func loadSiteSpecificScripts() {
+        let scripts: [(resource: String, domains: [String])] = [
+            ("facebook-sponsored-blocker", ["facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com"]),
+            ("youtube-ad-blocker", ["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "tv.youtube.com", "youtubekids.com", "youtube-nocookie.com"]),
+        ]
+
+        for entry in scripts {
+            guard let path = Bundle.main.path(forResource: entry.resource, ofType: "js"),
+                  let source = try? String(contentsOfFile: path, encoding: .utf8) else {
+                abLog.warning("Failed to load site-specific script: \(entry.resource, privacy: .public)")
+                continue
+            }
+            for domain in entry.domains {
+                siteSpecificScripts[domain] = source
+            }
+        }
+
+        abLog.info("Loaded \(self.siteSpecificScripts.count) site-specific script mappings")
+    }
+
+    /// Find a site-specific script for the given host.
+    private func siteSpecificScript(for host: String) -> String? {
+        if let script = siteSpecificScripts[host] { return script }
+        let parts = host.split(separator: ".", maxSplits: 1)
+        if parts.count == 2, let script = siteSpecificScripts[String(parts[1])] {
+            return script
+        }
+        return nil
     }
 
     // MARK: - Rule Parsing

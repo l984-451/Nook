@@ -51,22 +51,13 @@ struct PinnedTabView: View {
                     Spacer()
                     VStack {
                         Spacer()
-                        ZStack {
-                            tabIcon
-                                .resizable()
-                                .interpolation(.high)
-                                .antialiased(true)
-                                .scaledToFit()
-                                .frame(height: pinnedTabsConfiguration.faviconHeight)
-                                .opacity(isUnloaded ? 0.5 : 1.0)
-
-                            if isUnloaded {
-                                Image(systemName: "moon.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                                    .offset(x: pinnedTabsConfiguration.faviconHeight / 2, y: -(pinnedTabsConfiguration.faviconHeight / 2))
-                            }
-                        }
+                        tabIcon
+                            .resizable()
+                            .interpolation(.high)
+                            .antialiased(true)
+                            .scaledToFit()
+                            .frame(height: pinnedTabsConfiguration.faviconHeight)
+                            .opacity(isUnloaded ? 0.5 : 1.0)
                         Spacer()
                     }
 

@@ -23,6 +23,8 @@ struct CommandPaletteView: View {
     @State private var text: String = ""
     @State private var selectedSuggestionIndex: Int = -1
     @State private var hoveredSuggestionIndex: Int? = nil
+    @State private var userTypedText: String = ""
+    @State private var isNavigatingSuggestion: Bool = false
     @State private var activeSiteSearch: SiteSearchEntry? = nil
 
     private var siteSearchMatch: SiteSearchEntry? {
@@ -123,6 +125,14 @@ struct CommandPaletteView: View {
                                     .font(.system(size: 18, weight: .medium))
                                     .foregroundColor(textFieldColor)
                                     .tint(gradientColorManager.primaryColor)
+                                    .overlay(alignment: .leading) {
+                                        if let suffix = inlineCompletionSuffix {
+                                            (Text(text).foregroundColor(.clear) + Text(suffix).foregroundColor(isDark ? .white.opacity(0.25) : .black.opacity(0.25)))
+                                                .font(.system(size: 18, weight: .medium))
+                                                .lineLimit(1)
+                                                .allowsHitTesting(false)
+                                        }
+                                    }
                                     .focused($isSearchFocused)
                                     .onKeyPress(.tab) {
                                         if let match = siteSearchMatch, activeSiteSearch == nil {
@@ -175,6 +185,11 @@ struct CommandPaletteView: View {
                                         return .ignored
                                     }
                                     .onChange(of: text) { _, newValue in
+                                        if isNavigatingSuggestion {
+                                            isNavigatingSuggestion = false
+                                            return
+                                        }
+                                        userTypedText = newValue
                                         searchManager.searchSuggestions(
                                             for: newValue
                                         )
@@ -269,6 +284,7 @@ struct CommandPaletteView: View {
                 searchManager.updateProfileContext()
 
                 text = commandPalette.prefilledText
+                userTypedText = commandPalette.prefilledText
 
                 DispatchQueue.main.async {
                     isSearchFocused = true
@@ -284,6 +300,7 @@ struct CommandPaletteView: View {
                 isSearchFocused = false
                 searchManager.clearSuggestions()
                 text = ""
+                userTypedText = ""
                 activeSiteSearch = nil
                 selectedSuggestionIndex = -1
             }
@@ -306,6 +323,7 @@ struct CommandPaletteView: View {
         .onChange(of: commandPalette.prefilledText) { _, newValue in
             if isVisible {
                 text = newValue
+                userTypedText = newValue
                 DispatchQueue.main.async {
                     isSearchFocused = true
                 }
@@ -482,6 +500,49 @@ struct CommandPaletteView: View {
         } else {
             selectedSuggestionIndex = max(selectedSuggestionIndex - 1, -1)
         }
+
+        // Update text field to show selected suggestion's info
+        isNavigatingSuggestion = true
+        if selectedSuggestionIndex >= 0 && selectedSuggestionIndex < visibleSuggestions.count {
+            text = displayTextForSuggestion(visibleSuggestions[selectedSuggestionIndex])
+        } else {
+            text = userTypedText
+        }
+    }
+
+    private func stripScheme(_ urlString: String) -> String {
+        for prefix in ["https://", "http://"] {
+            if urlString.hasPrefix(prefix) {
+                return String(urlString.dropFirst(prefix.count))
+            }
+        }
+        return urlString
+    }
+
+    private func displayTextForSuggestion(_ suggestion: SearchManager.SearchSuggestion) -> String {
+        switch suggestion.type {
+        case .tab(let tab):
+            return stripScheme(tab.url.absoluteString)
+        case .history(let entry):
+            return stripScheme(entry.url.absoluteString)
+        case .url, .search:
+            return suggestion.text
+        }
+    }
+
+    private var inlineCompletionSuffix: String? {
+        guard text == userTypedText,
+              !text.isEmpty,
+              selectedSuggestionIndex >= 0,
+              selectedSuggestionIndex < visibleSuggestions.count else { return nil }
+
+        let suggestion = visibleSuggestions[selectedSuggestionIndex]
+        let target = suggestion.text
+
+        guard target.lowercased().hasPrefix(text.lowercased()),
+              target.count > text.count else { return nil }
+
+        return String(target.dropFirst(text.count))
     }
 
     private func iconForSuggestion(_ suggestion: SearchManager.SearchSuggestion)

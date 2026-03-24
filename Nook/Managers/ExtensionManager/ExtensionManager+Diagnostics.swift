@@ -295,15 +295,20 @@ extension ExtensionManager {
 
             if let bgWV = bgWV {
                 bgWV.evaluateJavaScript("""
-                    JSON.stringify({
-                        url: location.href,
-                        hasRuntime: typeof chrome !== 'undefined' && typeof chrome.runtime !== 'undefined',
-                        runtimeId: (typeof chrome !== 'undefined' && chrome.runtime) ? chrome.runtime.id : null,
-                        listeners: {
-                            onConnect: typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onConnect ? chrome.runtime.onConnect.hasListeners() : false,
-                            onMessage: typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage ? chrome.runtime.onMessage.hasListeners() : false
+                    (function() {
+                        try {
+                            var c = typeof chrome !== 'undefined' ? chrome : null;
+                            return JSON.stringify({
+                                url: location.href,
+                                hasRuntime: !!(c && c.runtime),
+                                runtimeId: (c && c.runtime) ? c.runtime.id : null,
+                                hasOnConnect: !!(c && c.runtime && c.runtime.onConnect),
+                                hasOnMessage: !!(c && c.runtime && c.runtime.onMessage)
+                            });
+                        } catch(e) {
+                            return JSON.stringify({error: e.message});
                         }
-                    })
+                    })()
                 """) { result, error in
                     let logger = Logger(subsystem: "com.nook.browser", category: "Extensions")
                     if let json = result as? String {

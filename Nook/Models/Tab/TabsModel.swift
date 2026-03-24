@@ -29,6 +29,9 @@ final class TabEntity {
     var canGoBack: Bool = false
     var canGoForward: Bool = false
 
+    // Pinned tab home URL (the URL the tab resets to)
+    var pinnedURLString: String?
+
     init(
         id: UUID,
         urlString: String,
@@ -42,7 +45,8 @@ final class TabEntity {
         displayNameOverride: String? = nil,
         currentURLString: String? = nil,
         canGoBack: Bool = false,
-        canGoForward: Bool = false
+        canGoForward: Bool = false,
+        pinnedURLString: String? = nil
     ) {
         self.id = id
         self.urlString = urlString
@@ -59,6 +63,7 @@ final class TabEntity {
         self.currentURLString = currentURLString ?? urlString
         self.canGoBack = canGoBack
         self.canGoForward = canGoForward
+        self.pinnedURLString = pinnedURLString
     }
 }
 

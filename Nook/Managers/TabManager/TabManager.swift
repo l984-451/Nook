@@ -49,6 +49,9 @@ import OSLog
         let currentURLString: String?
         let canGoBack: Bool
         let canGoForward: Bool
+
+        // Pinned tab home URL
+        let pinnedURLString: String?
     }
 
     struct SnapshotFolder: Codable {
@@ -244,6 +247,7 @@ import OSLog
             e.currentURLString = t.currentURLString
             e.canGoBack = t.canGoBack
             e.canGoForward = t.canGoForward
+            e.pinnedURLString = t.pinnedURLString
         } else {
             let e = TabEntity(
                 id: t.id,
@@ -258,7 +262,8 @@ import OSLog
                 displayNameOverride: t.displayNameOverride,
                 currentURLString: t.currentURLString,
                 canGoBack: t.canGoBack,
-                canGoForward: t.canGoForward
+                canGoForward: t.canGoForward,
+                pinnedURLString: t.pinnedURLString
             )
             ctx.insert(e)
         }
@@ -1876,6 +1881,7 @@ class TabManager: ObservableObject {
         tab.isSpacePinned = false  // Clear space-pinned status
         tab.folderId = nil         // Clear folder reference
         tab.isPinned = true        // CRITICAL: Explicitly set global pin status
+        if tab.pinnedURL == nil { tab.pinnedURL = tab.url }
 
         withCurrentProfilePinnedArray { arr in
             // Append to end; index normalized after mutation
@@ -1904,6 +1910,7 @@ class TabManager: ObservableObject {
             return
         }
         moved.isPinned = false
+        moved.pinnedURL = nil
         moved.spaceId = sid
         var arr = tabsBySpace[sid] ?? []
         arr.insert(moved, at: 0)
@@ -1962,6 +1969,7 @@ class TabManager: ObservableObject {
         tab.spaceId = spaceId
         tab.isSpacePinned = true   // CRITICAL: Explicitly set space-pinned status
         tab.isPinned = false       // CRITICAL: Clear global pin status
+        if tab.pinnedURL == nil { tab.pinnedURL = tab.url }
         var spacePinned = spacePinnedTabs[spaceId] ?? []
         let nextIndex = (spacePinned.map { $0.index }.max() ?? -1) + 1
         tab.index = nextIndex
@@ -1980,6 +1988,8 @@ class TabManager: ObservableObject {
         guard index < spacePinned.count else { return }
         let unpinned = spacePinned.remove(at: index)
         setSpacePinnedTabs(spacePinned, for: spaceId)
+
+        unpinned.pinnedURL = nil
 
         // Add to regular tabs in the same space
         var regularTabs = tabsBySpace[spaceId] ?? []
@@ -2062,9 +2072,19 @@ class TabManager: ObservableObject {
         t.isSpacePinned = e.isSpacePinned
         t.displayNameOverride = e.displayNameOverride
 
+        // Restore pinned URL; default to current URL for legacy pinned tabs
+        if let pinnedStr = e.pinnedURLString, let pURL = URL(string: pinnedStr) {
+            t.pinnedURL = pURL
+        } else if e.isPinned || e.isSpacePinned {
+            t.pinnedURL = url
+        }
+
         // Restore navigation state
         t.canGoBack = e.canGoBack
         t.canGoForward = e.canGoForward
+
+        // Restore favicon from disk cache for instant display on startup
+        t.restoreFaviconFromCache()
 
         return t
     }
@@ -2350,7 +2370,8 @@ class TabManager: ObservableObject {
                     displayNameOverride: t.displayNameOverride,
                     currentURLString: t.url.absoluteString,
                     canGoBack: t.canGoBack,
-                    canGoForward: t.canGoForward
+                    canGoForward: t.canGoForward,
+                    pinnedURLString: t.pinnedURL?.absoluteString
                 ))
             }
         }
@@ -2373,7 +2394,8 @@ class TabManager: ObservableObject {
                     displayNameOverride: t.displayNameOverride,
                     currentURLString: t.url.absoluteString,
                     canGoBack: t.canGoBack,
-                    canGoForward: t.canGoForward
+                    canGoForward: t.canGoForward,
+                    pinnedURLString: t.pinnedURL?.absoluteString
                 ))
             }
             // Regular tabs for this space
@@ -2393,7 +2415,8 @@ class TabManager: ObservableObject {
                     displayNameOverride: t.displayNameOverride,
                     currentURLString: t.url.absoluteString,
                     canGoBack: t.canGoBack,
-                    canGoForward: t.canGoForward
+                    canGoForward: t.canGoForward,
+                    pinnedURLString: t.pinnedURL?.absoluteString
                 ))
             }
         }
@@ -2427,16 +2450,12 @@ class TabManager: ObservableObject {
 }
 
 extension TabManager {
-    nonisolated func reattachBrowserManager(_ bm: BrowserManager) {
-        Task { @MainActor in
-            await _reattachBrowserManager(bm)
-        }
-    }
-    
-    private func _reattachBrowserManager(_ bm: BrowserManager) async {
+    /// Synchronous reattach — sets browserManager on all tabs immediately.
+    /// Must be called from @MainActor context (e.g., BrowserManager.init).
+    func reattachBrowserManager(_ bm: BrowserManager) {
         self.browserManager = bm
-        let spacePinned = currentSpace.flatMap { spacePinnedTabs(for: $0.id) } ?? []
-        for t in (self.pinnedTabs + spacePinned + self.tabs) {
+        // Use allTabs() to cover ALL tabs across ALL spaces, not just the current space
+        for t in allTabs() {
             t.browserManager = bm
         }
         // Assign any pinned tabs that were loaded without a profile once currentProfile is known
@@ -2450,18 +2469,14 @@ extension TabManager {
             persistSnapshot()
         }
         if let current = self.currentTab {
-            let all = self.pinnedTabs + spacePinned + self.tabs
-            if let match = all.first(where: { $0.id == current.id }) {
+            if let match = allTabs().first(where: { $0.id == current.id }) {
                 self.currentTab = match
             }
         }
-        // REMOVED: Forcing lazy webView creation here caused duplicate WebViews
-        // The WebView should only be created when the window actually displays the tab
-        // if let ct = self.currentTab { _ = ct.webView }
-        
+
         // Inform the extension controller about existing tabs and the active tab
         if #available(macOS 15.5, *) {
-            for t in (self.pinnedTabs + spacePinned + self.tabs) where t.didNotifyOpenToExtensions == false {
+            for t in allTabs() where t.didNotifyOpenToExtensions == false {
                 ExtensionManager.shared.notifyTabOpened(t)
                 t.didNotifyOpenToExtensions = true
             }

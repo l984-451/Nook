@@ -34,21 +34,12 @@ struct SpaceTab: View {
             }
         }) {
             HStack(spacing: 8) {
-                ZStack {
-                    tab.favicon
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 18, height: 18)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .opacity(tab.isUnloaded ? 0.5 : 1.0)
-                    
-                    if tab.isUnloaded {
-                        Image(systemName: "moon.fill")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                            .offset(x: 6, y: -6)
-                    }
-                }
+                tab.favicon
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 18, height: 18)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .opacity(tab.isUnloaded ? 0.5 : 1.0)
                 if tab.hasAudioContent || tab.hasPlayingAudio || tab.isAudioMuted {
                     Button(action: {
                         onMute()
@@ -217,6 +208,35 @@ struct SpaceTab: View {
                 tab.displayNameOverride = nil
             } label: {
                 Label("Reset Tab Name", systemImage: "arrow.uturn.backward")
+            }
+        }
+
+        if (tab.isPinned || tab.isSpacePinned), tab.hasNavigatedAwayFromPinnedURL {
+            Button {
+                tab.resetToPinnedURL()
+            } label: {
+                Label("Reset to Pinned URL", systemImage: "arrow.uturn.backward.circle")
+            }
+        }
+
+        if (tab.isPinned || tab.isSpacePinned), tab.pinnedURL != nil {
+            Button {
+                browserManager.dialogManager.showDialog(
+                    EditPinnedURLDialog(
+                        tab: tab,
+                        onSave: { newURL in
+                            tab.pinnedURL = newURL
+                            tab.loadURL(newURL)
+                            browserManager.dialogManager.closeDialog()
+                            tabManager.debouncedPersistSnapshot()
+                        },
+                        onCancel: {
+                            browserManager.dialogManager.closeDialog()
+                        }
+                    )
+                )
+            } label: {
+                Label("Edit Pinned URL", systemImage: "pencil.circle")
             }
         }
     }

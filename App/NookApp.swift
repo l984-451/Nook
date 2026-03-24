@@ -162,6 +162,11 @@ struct NookApp: App {
         windowRegistry.onWindowRegister = { [weak browserManager] windowState in
             browserManager?.setupWindowState(windowState)
         }
+        // Retroactively set up any windows that registered before this callback was set
+        // (child .onAppear fires before parent .onAppear in SwiftUI)
+        for (_, windowState) in windowRegistry.windows {
+            browserManager.setupWindowState(windowState)
+        }
 
         windowRegistry.onWindowClose = {
             [webViewCoordinator, weak browserManager] windowId in

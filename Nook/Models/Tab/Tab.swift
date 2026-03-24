@@ -79,6 +79,14 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     var isPinned: Bool = false  // Global pinned (essentials)
     var isSpacePinned: Bool = false  // Space-level pinned
     var folderId: UUID?  // Folder membership for tabs within spacepinned area
+    /// The "home" URL for pinned tabs. Set when tab is first pinned or via "Edit Pinned URL".
+    var pinnedURL: URL? = nil
+
+    /// Whether this tab's current URL differs from its pinned "home" URL.
+    var hasNavigatedAwayFromPinnedURL: Bool {
+        guard let pinnedURL else { return false }
+        return url.absoluteString != pinnedURL.absoluteString
+    }
     
     // MARK: - Ephemeral State
     /// Whether this tab belongs to an ephemeral/incognito session
@@ -160,7 +168,11 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         }
     }
 
-    var loadingState: LoadingState = .idle
+    @Published var loadingState: LoadingState = .idle
+
+    // MARK: - Web Process Crash Tracking
+    var webProcessCrashCount: Int = 0
+    var lastWebProcessCrashDate: Date = .distantPast
 
     @Published var canGoBack: Bool = false
     @Published var canGoForward: Bool = false
@@ -364,6 +376,12 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         loadingState = .idle
     }
 
+    /// Navigate this tab back to its pinned "home" URL.
+    func resetToPinnedURL() {
+        guard let pinnedURL else { return }
+        loadURL(pinnedURL)
+    }
+
     private func updateNavigationState() {
         guard let webView = _webView else { return }
 
@@ -542,6 +560,8 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
                 forName: "nookWebStore")
             _webView?.configuration.userContentController.removeScriptMessageHandler(
                 forName: "nookShortcutDetect")
+            _webView?.configuration.userContentController.removeScriptMessageHandler(
+                forName: "nookAdBlocker")
 
             // Add handlers
             _webView?.configuration.userContentController.add(self, name: "linkHover")
@@ -555,6 +575,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             _webView?.configuration.userContentController.add(self, name: "historyStateDidChange")
             _webView?.configuration.userContentController.add(self, name: "NookIdentity")
             _webView?.configuration.userContentController.add(self, name: "nookShortcutDetect")
+            _webView?.configuration.userContentController.add(self, name: "nookAdBlocker")
 
             // Add Web Store integration handler for Chrome Web Store extension installs
             if let browserManager = browserManager {
@@ -1301,6 +1322,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             "historyStateDidChange",
             "NookIdentity",
             "nookShortcutDetect",
+            "nookAdBlocker",
         ]
 
         for handlerName in allMessageHandlers {
@@ -1627,6 +1649,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             "historyStateDidChange",
             "NookIdentity",
             "nookShortcutDetect",
+            "nookAdBlocker",
         ]
 
         for handlerName in allMessageHandlers {
@@ -2259,6 +2282,28 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         return faviconCache[key]
     }
 
+    /// Restore favicon from cache (memory then disk) synchronously.
+    /// Used during startup to give pinned/visible tabs their favicons instantly.
+    func restoreFaviconFromCache() {
+        guard url.scheme == "http" || url.scheme == "https", let host = url.host else { return }
+        let cacheKey = host
+
+        // Fast path: memory cache
+        if let cached = Self.getMemoryCachedFavicon(for: cacheKey) {
+            self.favicon = cached
+            self.faviconFetchRequested = true
+            return
+        }
+
+        // Sync disk read — acceptable during startup for a small number of pinned tabs
+        if let diskCached = Self.loadFaviconFromDisk(for: cacheKey) {
+            // Promote to memory cache
+            Self.cacheFavicon(diskCached, for: cacheKey)
+            self.favicon = diskCached
+            self.faviconFetchRequested = true
+        }
+    }
+
     static func cacheFavicon(_ favicon: SwiftUI.Image, for key: String) {
         faviconCacheLock.lock()
 
@@ -2418,7 +2463,9 @@ extension Tab: WKNavigationDelegate {
                 ExtensionManager.shared.notifyTabPropertiesChanged(self, properties: [.URL])
 
                 // Extension diagnostics: check content scripts, background worker, and messaging
+                #if DEBUG
                 ExtensionManager.shared.diagnoseExtensionState(for: webView, url: newURL)
+                #endif
             }
             browserManager?.syncTabAcrossWindows(self.id)
 
@@ -2518,6 +2565,35 @@ extension Tab: WKNavigationDelegate {
         }
 
         updateNavigationStateEnhanced(source: "didFail")
+    }
+
+    // MARK: - Web Process Crash Recovery
+    public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        let now = Date()
+        // Reset crash counter if last crash was more than 30 seconds ago (new crash burst)
+        if now.timeIntervalSince(lastWebProcessCrashDate) > 30 {
+            webProcessCrashCount = 0
+        }
+        webProcessCrashCount += 1
+        lastWebProcessCrashDate = now
+
+        NSLog("[Tab] WebContent process terminated for tab %@ (crash #%d in window)", id.uuidString, webProcessCrashCount)
+        loadingState = .idle
+
+        // Hard stop after 4 crashes in a 30-second window — the system is in a bad state
+        // (e.g., XPC services unavailable after sleep/wake) and retrying is making it worse.
+        guard webProcessCrashCount <= 4 else {
+            NSLog("[Tab] Giving up on tab %@ after %d consecutive crashes", id.uuidString, webProcessCrashCount)
+            return
+        }
+
+        // Delay reload with exponential backoff. Immediately reloading spawns a new web process
+        // into the same broken XPC state, causing a tight crash loop. The delay gives launchservicesd
+        // and other XPC services time to finish restarting after a system wake.
+        let delay = Double(webProcessCrashCount) * 2.0 // 2s, 4s, 6s, 8s
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak webView] in
+            webView?.reload()
+        }
     }
 
     // MARK: - Loading Failed (before content started loading)
@@ -2813,6 +2889,29 @@ extension Tab: WKScriptMessageHandler {
         case "nookShortcutDetect":
             handleShortcutDetection(message: message)
 
+        case "nookAdBlocker":
+            // Native ad skip — evaluateJavaScript from the app process is invisible
+            // to YouTube's anti-adblock detection (no extension can do this)
+            if let body = message.body as? [String: Any],
+               let type = body["type"] as? String,
+               type == "ad-playing"
+            {
+                message.webView?.evaluateJavaScript("""
+                    (function() {
+                        var v = document.querySelector('#movie_player video');
+                        if (v && isFinite(v.duration) && v.duration > 0) {
+                            v.currentTime = v.duration;
+                        }
+                        var skip = document.querySelector(
+                            '.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, button[id^="skip-button"]'
+                        );
+                        if (skip) skip.click();
+                        var overlay = document.querySelector('.ytp-ad-overlay-container');
+                        if (overlay) overlay.style.setProperty('display', 'none', 'important');
+                    })()
+                    """)
+            }
+
         default:
             break
         }
@@ -3043,6 +3142,8 @@ extension Tab: WKUIDelegate {
             forName: "historyStateDidChange")
         newWebView.configuration.userContentController.removeScriptMessageHandler(
             forName: "NookIdentity")
+        newWebView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "nookAdBlocker")
 
         // Now add the handlers
         newWebView.configuration.userContentController.add(newTab, name: "linkHover")
@@ -3055,6 +3156,7 @@ extension Tab: WKUIDelegate {
             newTab, name: "backgroundColor_\(newTab.id.uuidString)")
         newWebView.configuration.userContentController.add(newTab, name: "historyStateDidChange")
         newWebView.configuration.userContentController.add(newTab, name: "NookIdentity")
+        newWebView.configuration.userContentController.add(newTab, name: "nookAdBlocker")
 
         // Set custom user agent
         newWebView.customUserAgent =
@@ -3084,12 +3186,12 @@ extension Tab: WKUIDelegate {
         let handlerNames = ["linkHover", "commandHover", "commandClick", "pipStateChange",
                            "mediaStateChange_\(tab.id.uuidString)",
                            "backgroundColor_\(tab.id.uuidString)",
-                           "historyStateDidChange", "NookIdentity"]
-        
+                           "historyStateDidChange", "NookIdentity", "nookAdBlocker"]
+
         for handlerName in handlerNames {
             userContentController.removeScriptMessageHandler(forName: handlerName)
         }
-        
+
         // Add handlers for the OAuth tab
         userContentController.add(tab, name: "linkHover")
         userContentController.add(tab, name: "commandHover")
@@ -3099,6 +3201,7 @@ extension Tab: WKUIDelegate {
         userContentController.add(tab, name: "backgroundColor_\(tab.id.uuidString)")
         userContentController.add(tab, name: "historyStateDidChange")
         userContentController.add(tab, name: "NookIdentity")
+        userContentController.add(tab, name: "nookAdBlocker")
     }
     
     /// Checks if a URL indicates OAuth completion and handles the flow

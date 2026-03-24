@@ -718,17 +718,17 @@ public enum StartupLoadMode: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .nothing: return "Load Nothing"
-        case .favorites: return "Load Favorites"
-        case .favoritesAndSpace: return "Load Favorites & Space"
+        case .nothing: return "Last Tab Only"
+        case .favorites: return "Last Tab & Favorites"
+        case .favoritesAndSpace: return "Last Tab, Favorites & Space"
         }
     }
 
     var description: String {
         switch self {
-        case .nothing: return "All tabs start asleep. Fastest startup, lowest memory."
-        case .favorites: return "Only favorites are loaded on start. Space tabs load when selected."
-        case .favoritesAndSpace: return "Favorites and current space tabs are loaded on start."
+        case .nothing: return "Only your last open tab is loaded. Other tabs load when selected."
+        case .favorites: return "Your last open tab and favorites are loaded on start. Space tabs load when selected."
+        case .favoritesAndSpace: return "Your last open tab, favorites, and current space tabs are loaded on start."
         }
     }
 }

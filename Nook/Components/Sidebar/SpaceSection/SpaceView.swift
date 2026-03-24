@@ -447,6 +447,28 @@ struct SpaceView: View {
             Button { browserManager.splitManager.enterSplit(with: tab, placeOn: .right, in: windowState) } label: { Label("Open in Split (Right)", systemImage: "rectangle.split.2x1") }
             Button { browserManager.splitManager.enterSplit(with: tab, placeOn: .left, in: windowState) } label: { Label("Open in Split (Left)", systemImage: "rectangle.split.2x1") }
             Divider()
+            if tab.hasNavigatedAwayFromPinnedURL {
+                Button { tab.resetToPinnedURL() } label: { Label("Reset to Pinned URL", systemImage: "arrow.uturn.backward.circle") }
+            }
+            if tab.pinnedURL != nil {
+                Button {
+                    browserManager.dialogManager.showDialog(
+                        EditPinnedURLDialog(
+                            tab: tab,
+                            onSave: { newURL in
+                                tab.pinnedURL = newURL
+                                tab.loadURL(newURL)
+                                browserManager.dialogManager.closeDialog()
+                                tabManager.debouncedPersistSnapshot()
+                            },
+                            onCancel: {
+                                browserManager.dialogManager.closeDialog()
+                            }
+                        )
+                    )
+                } label: { Label("Edit Pinned URL", systemImage: "pencil.circle") }
+            }
+            Divider()
             Button { tabManager.unpinTabFromSpace(tab) } label: { Label("Unpin from Space", systemImage: "pin.slash") }
             Button { onPinTab(tab) } label: { Label("Pin Globally", systemImage: "pin.circle") }
             Divider()
