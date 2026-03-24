@@ -15,5 +15,15 @@
       sparkle:shortVersionString="1.0.7"
       type="application/octet-stream"/>
   </item>
+  <item>
+    <title>Version 1.1.0</title>
+    <sparkle:releaseNotesLink>https://github.com/l984-451/Nook/releases/tag/v1.1.0</sparkle:releaseNotesLink>
+    <pubDate>Tue, 24 Mar 2026 15:56:59 +0000</pubDate>
+    <enclosure
+      url="https://github.com/l984-451/Nook/releases/download/v1.1.0/Nook-v1.1.0.dmg"
+      sparkle:version="110"
+      sparkle:shortVersionString="1.1.0"
+      type="application/octet-stream"/>
+  </item>
 </channel>
 </rss>
