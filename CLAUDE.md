@@ -36,10 +36,9 @@ xcodebuild test -scheme Nook
 
 ## Git Workflow
 
-- **All work branches from `dev`**. PRs must target `dev`, not `main` (enforced by CI).
-- **`main`** is release-only. Merges from `dev` are tagged `v*`, triggering the notarized DMG build.
+- **`main`** is the primary development branch. All work happens here.
+- **`release`** is for releases. Merges from `main` are tagged `v*`, triggering the notarized DMG build.
 - AI assistance must be disclosed per CONTRIBUTING.md.
-- Upstream remote: `https://github.com/nook-browser/Nook.git` (added as `upstream`).
 
 ## Architecture
 
