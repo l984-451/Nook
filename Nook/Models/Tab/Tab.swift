@@ -3014,11 +3014,16 @@ extension Tab: WKScriptMessageHandler {
     private func isLikelyOAuthOrExternalWindow(url: URL, windowFeatures: WKWindowFeatures) -> Bool {
         if OAuthDetector.isLikelyOAuthPopupURL(url) { return true }
 
-        // If the popup has explicit dimensions it's almost certainly a modal sign-in window
+        // If the popup has explicit dimensions AND is cross-origin, it's likely a sign-in window.
+        // Same-origin popups with dimensions (e.g. log viewers, help windows) should open normally.
         if let width = windowFeatures.width, let height = windowFeatures.height,
             width.doubleValue > 0 && height.doubleValue > 0
         {
-            return true
+            let currentHost = self.url.host?.lowercased()
+            let popupHost = url.host?.lowercased()
+            if currentHost != popupHost {
+                return true
+            }
         }
 
         return false
