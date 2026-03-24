@@ -157,6 +157,8 @@ struct NookApp: App {
         // Initialize keyboard shortcut manager
         keyboardShortcutManager.setBrowserManager(browserManager)
         browserManager.keyboardShortcutManager = keyboardShortcutManager
+        browserManager.mcpManager = mcpManager
+        browserManager.tabOrganizerManager = tabOrganizerManager
 
         // Set up window lifecycle callbacks
         windowRegistry.onWindowRegister = { [weak browserManager] windowState in

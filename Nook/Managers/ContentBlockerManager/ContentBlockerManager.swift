@@ -290,9 +290,15 @@ final class ContentBlockerManager {
     /// Set up content blocker scripts for a navigation. Called from Tab's decidePolicyFor.
     func setupContentBlockerScripts(for url: URL, in webView: WKWebView, tab: Tab) {
         guard isEnabled else { return }
-        guard !isDomainAllowed(url.host) else { return }
-        guard !isTemporarilyDisabled(tabId: tab.id) else { return }
-        guard !tab.isOAuthFlow else { return }
+
+        // For exempted navigations, remove all blocking (including WKContentRuleList) and return
+        if isDomainAllowed(url.host) || isTemporarilyDisabled(tabId: tab.id) || tab.isOAuthFlow {
+            removeBlocking(from: webView)
+            return
+        }
+
+        // Ensure network-level blocking is active (may have been removed for a previous allowed-domain navigation)
+        applyBlocking(to: webView)
 
         let ucc = webView.configuration.userContentController
 
