@@ -25,5 +25,17 @@
       sparkle:shortVersionString="1.1.0"
       type="application/octet-stream"/>
   </item>
+  <item>
+    <title>Version 1.1.1</title>
+    <sparkle:releaseNotesLink>https://github.com/l984-451/Nook/releases/tag/v1.1.1</sparkle:releaseNotesLink>
+    <pubDate>Tue, 24 Mar 2026 16:15:35 +0000</pubDate>
+    <enclosure
+      url="https://github.com/l984-451/Nook/releases/download/v1.1.1/Nook-v1.1.1.dmg"
+      sparkle:version="111"
+      sparkle:shortVersionString="1.1.1"
+      sparkle:edSignature="YNztZtoY+CMym9568lCkIGeGuvD2j+VVf4Lgfqq62YnnPzplJvxfmfH6BrNAcP5jw/6hSk7NaJIFRFHC7sl0DA=="
+      length="33177880"
+      type="application/octet-stream"/>
+  </item>
 </channel>
 </rss>
