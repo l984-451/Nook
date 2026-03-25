@@ -16,7 +16,9 @@
     'instreamAdBreak', 'linearAdSequenceRenderer',
     'instreamVideoAdRenderer', 'adPlacementRenderer',
     'adSlotRenderer', 'adPlacementConfig',
-    'bannerPromoRenderer', 'enforcementOverlayRendererModel'
+    'bannerPromoRenderer', 'enforcementOverlayRendererModel',
+    'adPodMetadata', 'adSlots', 'fullyAdFreeUpsell',
+    'vpaidAdDisplayContainer', 'surveysEnabled'
     // NOTE: playbackTracking is NOT stripped — needed for video playback
     // NOTE: promotedVideoRenderer stripped only inside stripRendererAds (context-aware)
   ];
@@ -138,19 +140,14 @@
 
   // === LAYER 2: Fetch/XHR Response Interception ===
   // Persistent across SPA navigations since we patch global prototypes
-  //
-  // PERF: Only intercept /next (overlay/companion ads) — NOT /player.
-  // Layer 1 object traps already handle ytInitialPlayerResponse for the
-  // initial load, and for SPA navigations YouTube processes the /player
-  // response into internal state that our traps catch. Intercepting /player
-  // adds ~10-50ms latency to every video load (clone + parse + stringify).
 
   function isAdDataUrl(url) {
     if (!url) return false;
     var s = typeof url === 'string' ? url : url.toString();
-    // Only intercept endpoints that carry ad renderers/overlays
+    // Intercept endpoints that carry ad renderers/overlays and player ad data
     return s.indexOf('/youtubei/v1/next') !== -1 ||
-           s.indexOf('/youtubei/v1/browse') !== -1;
+           s.indexOf('/youtubei/v1/browse') !== -1 ||
+           s.indexOf('/youtubei/v1/player') !== -1;
   }
 
   // Fast ad-only strip — neutralize top-level keys, skip deep recursion
@@ -171,7 +168,7 @@
     return obj;
   }
 
-  // Hook fetch() — only for ad-data endpoints, not /player
+  // Hook fetch() — intercept ad-data and player endpoints
   var origFetch = window.fetch;
   window.fetch = function() {
     var url = arguments[0];
@@ -197,7 +194,7 @@
     });
   };
 
-  // Hook XMLHttpRequest — same narrow matching
+  // Hook XMLHttpRequest — same matching
   var origXhrOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function(method, url) {
     this.__nookUrl = url;
@@ -230,7 +227,7 @@
     return origXhrSend.apply(this, arguments);
   };
 
-  console.log(TAG, 'Layer 2: fetch/XHR hooks installed (next/browse only)');
+  console.log(TAG, 'Layer 2: fetch/XHR hooks installed (next/browse/player)');
 
 
   // === LAYER 3: Player State Monitor → Native Skip ===
@@ -238,6 +235,7 @@
   // via evaluateJavaScript, which is invisible to YouTube's anti-adblock
 
   var adSkipInProgress = false;
+  var adPollTimer = null;
 
   function notifyNativeAdPlaying() {
     if (adSkipInProgress) return;
@@ -265,14 +263,49 @@
   }
 
   function skipAdDirect() {
+    // Seek to end of ad video
     var video = document.querySelector('#movie_player video');
     if (video && isFinite(video.duration) && video.duration > 0) {
       video.currentTime = video.duration;
     }
+    // Click skip button (multiple selectors for different YouTube UI variants)
     var skipBtn = document.querySelector(
-      '.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, button[id^="skip-button"]'
+      '.ytp-skip-ad-button, ' +
+      '.ytp-ad-skip-button, ' +
+      '.ytp-ad-skip-button-modern, ' +
+      '.ytp-ad-skip-button-container button, ' +
+      'button[id^="skip-button"], ' +
+      '.ytp-ad-overlay-close-button'
     );
-    if (skipBtn) skipBtn.click();
+    if (skipBtn) {
+      skipBtn.click();
+      console.log(TAG, 'Layer 3: skip button clicked');
+    }
+  }
+
+  function isAdPlaying() {
+    var player = document.querySelector('#movie_player, .html5-video-player');
+    if (!player) return false;
+    return player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting');
+  }
+
+  // Polling fallback: catches ads that slip past MutationObserver
+  function startAdPolling() {
+    if (adPollTimer) return;
+    adPollTimer = setInterval(function() {
+      if (isAdPlaying()) {
+        notifyNativeAdPlaying();
+        // Also try direct skip in case native handler is slow
+        skipAdDirect();
+      }
+    }, 300);
+  }
+
+  function stopAdPolling() {
+    if (adPollTimer) {
+      clearInterval(adPollTimer);
+      adPollTimer = null;
+    }
   }
 
   function setupPlayerObserver() {
@@ -311,11 +344,14 @@
     });
 
     // Check immediately in case ad is already showing
-    if (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')) {
+    if (isAdPlaying()) {
       notifyNativeAdPlaying();
     }
 
-    console.log(TAG, 'Layer 3: player observer installed');
+    // Start polling as an extra safety net
+    startAdPolling();
+
+    console.log(TAG, 'Layer 3: player observer + polling installed');
     return true;
   }
 
@@ -334,7 +370,8 @@
     'ytd-statement-banner-renderer',
     'ytd-compact-promoted-item-renderer',
     'ytd-action-companion-ad-renderer',
-    'ytd-player-legacy-desktop-watch-ads-renderer'
+    'ytd-player-legacy-desktop-watch-ads-renderer',
+    'ytd-ad-slot-and-layout-renderer'
   ];
   var AD_INNER_SEL_STR = AD_INNER_SELS.join(',');
 
@@ -384,7 +421,9 @@
 
     // Hide overlay ads (don't remove — they're inside the player)
     var overlays = document.querySelectorAll(
-      '.ytp-ad-overlay-container, .ytp-ad-text-overlay, .video-ads'
+      '.ytp-ad-overlay-container, .ytp-ad-text-overlay, .video-ads, ' +
+      '.ytp-ad-image-overlay, .ytp-ad-skip-ad-slot, ' +
+      '.ad-container:not(#movie_player)'
     );
     for (var j = 0; j < overlays.length; j++) {
       hideElement(overlays[j]);
@@ -409,7 +448,7 @@
     }
 
     // Remove masthead/banner ads
-    var masthead = document.querySelector('#masthead-ad');
+    var masthead = document.querySelector('#masthead-ad, #masthead-container .ytd-masthead-ad-v3-renderer');
     if (masthead) collapseElement(masthead);
     var playerAds = document.querySelector('#player-ads');
     if (playerAds) collapseElement(playerAds);
@@ -425,8 +464,17 @@
 
   // === LAYER 5: SPA Navigation Handler ===
 
-  function onSPANavigate() {
+  function onSPANavigateStart() {
+    // Reset skip state early so the new page starts fresh
+    adSkipInProgress = false;
+    stopAdPolling();
+  }
+
+  function onSPANavigateFinish() {
     console.log(TAG, 'Layer 5: SPA navigation detected');
+    // Reset observer state on player so it gets re-attached
+    var player = document.querySelector('#movie_player, .html5-video-player');
+    if (player) player.__nookObserving = false;
     cleanupAdContainers();
     setupPlayerObserver();
   }
@@ -470,8 +518,9 @@
     });
     bodyObserver.observe(document.body, { subtree: true, childList: true });
 
-    // SPA navigation listener
-    document.addEventListener('yt-navigate-finish', onSPANavigate);
+    // SPA navigation listeners
+    document.addEventListener('yt-navigate-start', onSPANavigateStart);
+    document.addEventListener('yt-navigate-finish', onSPANavigateFinish);
 
     // Initial cleanup
     cleanupAdContainers();

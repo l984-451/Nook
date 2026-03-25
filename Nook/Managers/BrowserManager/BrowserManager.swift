@@ -622,7 +622,9 @@ class BrowserManager: ObservableObject {
         if let activeTab {
             windowState.currentTabId = activeTab.id
             if activeTab.isUnloaded {
-                activeTab.loadWebViewIfNeeded()
+                // Pre-create the coordinator webview so the compositor can show it
+                // without creating a separate display webview on first render.
+                preloadTabInCoordinator(activeTab, windowId: windowState.id)
             }
         }
 
@@ -635,23 +637,40 @@ class BrowserManager: ObservableObject {
         case .favorites:
             let essentials = tabManager.essentialTabs(for: windowState.currentProfileId)
             for tab in essentials where tab.isUnloaded {
-                tab.loadWebViewIfNeeded()
+                preloadTabInCoordinator(tab, windowId: windowState.id)
             }
         case .favoritesAndSpace:
             let essentials = tabManager.essentialTabs(for: windowState.currentProfileId)
             for tab in essentials where tab.isUnloaded {
-                tab.loadWebViewIfNeeded()
+                preloadTabInCoordinator(tab, windowId: windowState.id)
             }
             if let space = activeSpace {
                 let spaceTabs = tabManager.tabs(in: space)
                 for tab in spaceTabs where tab.isUnloaded {
-                    tab.loadWebViewIfNeeded()
+                    preloadTabInCoordinator(tab, windowId: windowState.id)
                 }
             }
         }
 
         // Refresh compositor to show the current tab
         windowState.refreshCompositor()
+    }
+
+    /// Pre-create a tab's display webview in the coordinator pool so the compositor
+    /// can show it immediately without an extra round-trip load when the tab is selected.
+    /// Also calls loadWebViewIfNeeded() so isUnloaded returns false (compositor guard).
+    private func preloadTabInCoordinator(_ tab: Tab, windowId: UUID) {
+        guard let coordinator = webViewCoordinator else {
+            // Fallback: just ensure _webView exists for the isUnloaded guard
+            tab.loadWebViewIfNeeded()
+            return
+        }
+        // Only pre-create if not already in the coordinator pool for this window
+        guard coordinator.getWebView(for: tab.id, in: windowId) == nil else { return }
+        // Create the display webview in the coordinator pool (loads URL in background)
+        let webView = coordinator.createWebView(for: tab, in: windowId)
+        // Assign as primary so tab.isUnloaded returns false (compositor guard)
+        tab.assignWebViewToWindow(webView, windowId: windowId)
     }
 
     // MARK: - Profile Switching
@@ -2564,14 +2583,32 @@ class BrowserManager: ObservableObject {
         activeWindow.toggleFullScreen(nil)
     }
 
-    /// Show downloads (placeholder implementation)
+    /// Show the downloads panel in the sidebar
     func showDownloads() {
-        // TODO: Implement downloads UI
+        guard let windowState = windowRegistry?.activeWindow else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            windowState.sidebarMenuSelectedTab = .downloads
+            windowState.isSidebarMenuVisible = true
+            windowState.isSidebarAIChatVisible = false
+            windowState.savedSidebarWidth = windowState.sidebarWidth
+            let newWidth: CGFloat = 400
+            windowState.sidebarWidth = newWidth
+            windowState.sidebarContentWidth = max(newWidth - 16, 0)
+        }
     }
 
-    /// Show history (placeholder implementation)
+    /// Show the history panel in the sidebar
     func showHistory() {
-        // TODO: Implement history UI
+        guard let windowState = windowRegistry?.activeWindow else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            windowState.sidebarMenuSelectedTab = .history
+            windowState.isSidebarMenuVisible = true
+            windowState.isSidebarAIChatVisible = false
+            windowState.savedSidebarWidth = windowState.sidebarWidth
+            let newWidth: CGFloat = 400
+            windowState.sidebarWidth = newWidth
+            windowState.sidebarContentWidth = max(newWidth - 16, 0)
+        }
     }
 
     // MARK: - Tab Closure Undo Notification
