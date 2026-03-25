@@ -46,6 +46,9 @@ class BrowserWindowState {
     /// Whether the sidebar menu is visible in this window
     var isSidebarMenuVisible: Bool = false
 
+    /// The selected tab in the sidebar menu (history or downloads)
+    var sidebarMenuSelectedTab: Tabs = .history
+
     /// Whether the AI chat panel is visible in this window
     var isSidebarAIChatVisible: Bool = false
 
