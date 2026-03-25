@@ -2835,6 +2835,24 @@ extension TabManager {
 
     // MARK: - Bulk Tab Operations
 
+    func closeOtherTabs(_ tab: Tab) {
+        guard let spaceId = tab.spaceId else { return }
+        guard let tabs = tabsBySpace[spaceId] else { return }
+
+        // Get all regular tabs in this space except the given tab
+        let otherTabs = tabs.filter { $0.id != tab.id }
+
+        if otherTabs.isEmpty { return }
+
+        let tabsToTrack = otherTabs.map { (tab: $0, spaceId: spaceId) }
+
+        for tabToClose in otherTabs {
+            closeTabWithoutTracking(tabToClose.id)
+        }
+
+        trackRecentlyClosedTabs(tabsToTrack, count: otherTabs.count)
+    }
+
     func closeAllTabsBelow(_ tab: Tab) {
         guard let spaceId = tab.spaceId else { return }
         guard let tabs = tabsBySpace[spaceId] else { return }

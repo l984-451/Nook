@@ -76,14 +76,6 @@ struct SpaceContextMenu: View {
 
             Divider()
 
-            // Duplicate space (TODO)
-            Button {
-                // TODO: Implement duplicate space
-            } label: {
-                Label("Duplicate Space", systemImage: "plus.square.on.square")
-            }
-            .disabled(true)
-
             // Delete space
             if canDelete {
                 Button(role: .destructive) {

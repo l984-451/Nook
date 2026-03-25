@@ -73,14 +73,10 @@ struct SpaceTab: View {
                         .onExitCommand {
                             tab.cancelRename()
                         }
-                        .onAppear {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                if let textField = NSApp.keyWindow?.firstResponder as? NSTextView {
-                                    textField.selectAll(nil)
-                                }
-                            }
-                        }
                         .focused($isTextFieldFocused)
+                        .onAppear {
+                            isTextFieldFocused = true
+                        }
                 } else {
                     Text(tab.displayName)
                         .font(.system(size: 13, weight: .medium))
@@ -159,16 +155,18 @@ struct SpaceTab: View {
         let spaceId = tab.spaceId ?? UUID()
         let folders = tabManager.folders(for: spaceId)
 
-        Menu {
-            ForEach(folders, id: \.id) { folder in
-                Button {
-                    // TODO: Add tab to folder
-                } label: {
-                    Label(folder.name, systemImage: "folder.fill")
+        if !folders.isEmpty {
+            Menu {
+                ForEach(folders, id: \.id) { folder in
+                    Button {
+                        tabManager.moveTabToRegularFolder(tab: tab, folderId: folder.id)
+                    } label: {
+                        Label(folder.name, systemImage: "folder.fill")
+                    }
                 }
+            } label: {
+                Label("Add to Folder", systemImage: "folder.badge.plus")
             }
-        } label: {
-            Label("Add to Folder", systemImage: "folder.badge.plus")
         }
 
         if !tab.isPinned && !tab.isSpacePinned {
@@ -190,11 +188,15 @@ struct SpaceTab: View {
         }
 
         Button {
-            // TODO: Implement share
+            let picker = NSSharingServicePicker(items: [tab.url as NSURL])
+            if let window = NSApp.keyWindow {
+                let origin = NSPoint(x: window.frame.midX, y: window.frame.midY)
+                picker.show(relativeTo: .zero, of: window.contentView ?? NSView(), preferredEdge: .minY)
+                _ = origin
+            }
         } label: {
             Label("Share", systemImage: "square.and.arrow.up")
         }
-        .disabled(true)
 
         Button {
             tab.startRenaming()
@@ -316,12 +318,14 @@ struct SpaceTab: View {
             }
         }
 
-        Button {
-            // TODO: Implement close all except this
-        } label: {
-            Label("Close Others", systemImage: "xmark.circle")
+        let hasOtherTabs = (tabManager.tabsBySpace[tab.spaceId ?? UUID()]?.filter { $0.id != tab.id }.isEmpty == false)
+        if hasOtherTabs && !tab.isPinned && !tab.isSpacePinned {
+            Button {
+                tabManager.closeOtherTabs(tab)
+            } label: {
+                Label("Close Others", systemImage: "xmark.circle")
+            }
         }
-        .disabled(true)
 
         Button(role: .destructive) {
             onClose()
