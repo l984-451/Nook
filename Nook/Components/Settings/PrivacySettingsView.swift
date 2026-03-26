@@ -16,231 +16,110 @@ struct PrivacySettingsView: View {
     @State private var showingCookieManager = false
     @State private var showingCacheManager = false
     @State private var isClearing = false
-    @State private var isUpdatingFilters = false
 
     var body: some View {
         @Bindable var settings = nookSettings
 
-        return VStack(alignment: .leading, spacing: 20) {
-            // Cookie Management Section
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Cookie Management")
-                    .font(.headline)
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    cookieStatsView
-                    
-                    HStack {
-                        Button("Manage Cookies") {
-                            showingCookieManager = true
-                        }
-                        .buttonStyle(.bordered)
-                        
-                        Menu("Clear Data") {
-                            Button("Clear Expired Cookies") {
-                                clearExpiredCookies()
-                            }
-                            
-                            Button("Clear Third-Party Cookies") {
-                                clearThirdPartyCookies()
-                            }
-                            
-                            Button("Clear High-Risk Cookies") {
-                                clearHighRiskCookies()
-                            }
-                            
-                            Divider()
-                            
-                            Button("Clear All Cookies") {
-                                clearAllCookies()
-                            }
-                            
-                            Button("Privacy Cleanup") {
-                                performCookiePrivacyCleanup()
-                            }
-                            
-                            Divider()
-                            
-                            Button("Clear All Website Data", role: .destructive) {
-                                clearAllWebsiteData()
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(isClearing)
-                        
-                        if isClearing {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        }
-                    }
-                }
-                .padding()
-                .background(Color(NSColor.controlBackgroundColor))
-                .cornerRadius(8)
-            }
-            
-            Divider()
-            
-            // Cache Management Section
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Cache Management")
-                    .font(.headline)
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    cacheStatsView
-                    
-                    HStack {
-                        Button("Manage Cache") {
-                            showingCacheManager = true
-                        }
-                        .buttonStyle(.bordered)
-                        
-                        Menu("Clear Cache") {
-                            Button("Clear Stale Cache") {
-                                clearStaleCache()
-                            }
-                            
-                            Button("Clear Personal Data Cache") {
-                                clearPersonalDataCache()
-                            }
-                            
-                            Button("Clear Disk Cache") {
-                                clearDiskCache()
-                            }
-                            
-                            Button("Clear Memory Cache") {
-                                clearMemoryCache()
-                            }
-                            
-                            Divider()
-                            
-                            Button("Privacy Cleanup") {
-                                performCachePrivacyCleanup()
-                            }
-                            
-                            Divider()
-                            
-                            Button("Clear All Cache", role: .destructive) {
-                                clearAllCache()
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(isClearing)
-                        
-                        if isClearing {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        }
-                    }
-                }
-                .padding()
-                .background(Color(NSColor.controlBackgroundColor))
-                .cornerRadius(8)
-            }
-            
-            Divider()
-            
-            // Content Blocking Section
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Ad & Tracker Blocking")
-                    .font(.headline)
+        Form {
+            Section("Cookie Management") {
+                cookieStatsView
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle(isOn: $settings.adBlockerEnabled) {
-                        Text("Ad & Tracker Blocker")
+                HStack {
+                    Button("Manage Cookies") {
+                        showingCookieManager = true
                     }
-                    .onChange(of: nookSettings.adBlockerEnabled) { _, enabled in
+                    .buttonStyle(.bordered)
+
+                    Menu("Clear Data") {
+                        Button("Clear Expired Cookies") {
+                            clearExpiredCookies()
+                        }
+                        Button("Clear Third-Party Cookies") {
+                            clearThirdPartyCookies()
+                        }
+                        Button("Clear High-Risk Cookies") {
+                            clearHighRiskCookies()
+                        }
+                        Divider()
+                        Button("Clear All Cookies") {
+                            clearAllCookies()
+                        }
+                        Button("Privacy Cleanup") {
+                            performCookiePrivacyCleanup()
+                        }
+                        Divider()
+                        Button("Clear All Website Data", role: .destructive) {
+                            clearAllWebsiteData()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isClearing)
+
+                    if isClearing {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            }
+
+            Section("Cache Management") {
+                cacheStatsView
+
+                HStack {
+                    Button("Manage Cache") {
+                        showingCacheManager = true
+                    }
+                    .buttonStyle(.bordered)
+
+                    Menu("Clear Cache") {
+                        Button("Clear Stale Cache") {
+                            clearStaleCache()
+                        }
+                        Button("Clear Personal Data Cache") {
+                            clearPersonalDataCache()
+                        }
+                        Button("Clear Disk Cache") {
+                            clearDiskCache()
+                        }
+                        Button("Clear Memory Cache") {
+                            clearMemoryCache()
+                        }
+                        Divider()
+                        Button("Privacy Cleanup") {
+                            performCachePrivacyCleanup()
+                        }
+                        Divider()
+                        Button("Clear All Cache", role: .destructive) {
+                            clearAllCache()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isClearing)
+
+                    if isClearing {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            }
+
+            Section("Privacy Controls") {
+                Toggle("Block Cross-Site Tracking", isOn: $settings.blockCrossSiteTracking)
+                    .onChange(of: nookSettings.blockCrossSiteTracking) { _, enabled in
                         browserManager.contentBlockerManager.setEnabled(enabled)
                     }
-
-                    if nookSettings.adBlockerEnabled {
-                        HStack {
-                            if isUpdatingFilters {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                Text("Updating filter lists...")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                if let lastUpdate = nookSettings.adBlockerLastUpdate {
-                                    Text("Last updated: \(lastUpdate, style: .relative) ago")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                Button("Update Filters") {
-                                    isUpdatingFilters = true
-                                    Task {
-                                        await browserManager.contentBlockerManager.recompileFilterLists()
-                                        isUpdatingFilters = false
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-                        }
-                    }
-
-                    Text("Filter lists update automatically every 24 hours.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding()
-                .background(Color(NSColor.controlBackgroundColor))
-                .cornerRadius(8)
-
-                // Filter list management
-                if nookSettings.adBlockerEnabled {
-                    filterListManagementSection
-                }
             }
 
-            Divider()
-
-            // Privacy Controls Section
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Privacy Controls")
-                    .font(.headline)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Block Cross-Site Tracking", isOn: $settings.blockCrossSiteTracking)
-                        .onChange(of: nookSettings.blockCrossSiteTracking) { _, enabled in
-                            browserManager.contentBlockerManager.setEnabled(enabled)
-                        }
+            Section("Website Data") {
+                Button("Clear Browsing History") {
+                    clearBrowsingHistory()
                 }
-                .padding()
-                .background(Color(NSColor.controlBackgroundColor))
-                .cornerRadius(8)
+                Button("Clear Cache") {
+                    clearCache()
+                }
             }
-            
-            Divider()
-            
-            // Website Data Section
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Website Data")
-                    .font(.headline)
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Button("Clear Browsing History") {
-                        clearBrowsingHistory()
-                    }
-                    .buttonStyle(.bordered)
-                    
-                    Button("Clear Cache") {
-                        clearCache()
-                    }
-                    .buttonStyle(.bordered)
-                    
-                                    }
-                .padding()
-                .background(Color(NSColor.controlBackgroundColor))
-                .cornerRadius(8)
-            }
-            
-            Spacer()
         }
-        .padding()
-        .frame(minWidth: 520, minHeight: 360)
+        .formStyle(.grouped)
         .onAppear {
             Task {
                 await cookieManager.loadCookies()
@@ -341,84 +220,6 @@ struct PrivacySettingsView: View {
         }
     }
     
-    // MARK: - Filter List Management
-
-    private var filterListManagementSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Default Filter Lists")
-                .font(.subheadline)
-                .fontWeight(.medium)
-
-            ForEach(FilterListManager.defaultLists, id: \.filename) { list in
-                HStack {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.caption)
-                    Text(list.name)
-                        .font(.caption)
-                    Spacer()
-                    Text(list.category.rawValue)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.15))
-                        .cornerRadius(4)
-                }
-            }
-
-            if !FilterListManager.optionalLists.isEmpty {
-                Divider()
-                    .padding(.vertical, 4)
-
-                Text("Optional Filter Lists")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                ForEach(FilterListManager.FilterListCategory.allCases, id: \.rawValue) { category in
-                    let listsInCategory = FilterListManager.optionalLists.filter { $0.category == category }
-                    if !listsInCategory.isEmpty {
-                        Text(category.rawValue)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.top, 4)
-
-                        ForEach(listsInCategory, id: \.filename) { list in
-                            HStack {
-                                Toggle(isOn: Binding(
-                                    get: { nookSettings.enabledOptionalFilterLists.contains(list.filename) },
-                                    set: { enabled in
-                                        if enabled {
-                                            nookSettings.enabledOptionalFilterLists.append(list.filename)
-                                        } else {
-                                            nookSettings.enabledOptionalFilterLists.removeAll { $0 == list.filename }
-                                        }
-                                        browserManager.contentBlockerManager.filterListManager.enabledOptionalFilterListFilenames = Set(nookSettings.enabledOptionalFilterLists)
-                                        Task {
-                                            await browserManager.contentBlockerManager.recompileFilterLists()
-                                        }
-                                    }
-                                )) {
-                                    Text(list.name)
-                                        .font(.caption)
-                                }
-                                .toggleStyle(.checkbox)
-                            }
-                        }
-                    }
-                }
-
-                Text("Enabling additional lists improves blocking but increases memory usage.")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 4)
-            }
-        }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
-    }
-
     // MARK: - Actions
     
     private func clearExpiredCookies() {
