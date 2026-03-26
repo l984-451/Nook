@@ -192,8 +192,17 @@ Located in `Nook/Managers/ContentBlockerManager/`:
 
 ## Dependencies
 
-**SPM packages (resolved automatically):**
-Sparkle (auto-update), FaviconFinder, Garnish (UI utils), swift-numerics, swift-atomics, Highlightr (syntax highlighting), Fuzi (HTML/XML parsing), reeeed (web tech detection), LRUCache, Motion (animation), UniversalGlass, ColorfulX
+**SPM packages (5 direct, resolved automatically):**
+
+| Package | Purpose | Used by |
+|---------|---------|--------|
+| **Sparkle** | Auto-updates (notarized DMG distribution) | AppDelegate, BrowserManager |
+| **Garnish** | Color contrast/mixing utilities for accessibility | CommandPalette, NookButtonStyle, SidebarAIChat, SidebarMenuHistoryTab |
+| **FaviconFinder** | Fetches favicon URLs from websites | Tab, CommandPalette suggestions, SidebarMenuHistoryTab |
+| **mlx-swift-lm** | On-device LLM inference (Apple Silicon) | LocalLLMEngine → TabOrganizerManager |
+| **SafariConverterLib** | Converts AdGuard/uBlock filter rules to Safari format | ContentRuleListCompiler |
+
+Transitive deps pulled in automatically: swift-atomics, swift-numerics, swift-collections, swift-transformers, swift-jinja, swift-argument-parser, swift-asn1, swift-crypto, swift-psl, swift-log, SwiftSoup, LRUCache, PunycodeSwift, Chronicle, yyjson
 
 **Embedded in ThirdParty/:**
 BigUIPaging (paged views), HTSymbolHook (ObjC symbol hooking), MuteableWKWebView (audio muting, ObjC)

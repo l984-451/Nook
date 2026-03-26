@@ -121,14 +121,15 @@ struct SpaceView: View {
 
         var items: [AnyHashable] = []
 
-        // Filter out folder tabs from spacePinnedTabs before processing
-        // Only tabs with folderId == nil should appear outside folders
-        let nonFolderSpacePinnedTabs = currentSpacePinnedTabs.filter { $0.folderId == nil }
-        let folderSpacePinnedTabs = currentSpacePinnedTabs.filter { $0.folderId != nil }
-
-        // Group folder tabs by their folderId
-        let tabsByFolderId = Dictionary(grouping: folderSpacePinnedTabs) { tab in
-            tab.folderId
+        // Single-pass partition: split tabs into folder vs non-folder
+        var nonFolderSpacePinnedTabs: [Tab] = []
+        var tabsByFolderId: [UUID: [Tab]] = [:]
+        for tab in currentSpacePinnedTabs {
+            if let folderId = tab.folderId {
+                tabsByFolderId[folderId, default: []].append(tab)
+            } else {
+                nonFolderSpacePinnedTabs.append(tab)
+            }
         }
 
         // Add folders with their tabs
@@ -422,7 +423,8 @@ struct SpaceView: View {
             SpaceTab(
                 tab: tab,
                 action: { handleUserTabActivation(tab) },
-                onClose: { onCloseTab(tab) },
+                onClose: { tabManager.forceRemoveTab(tab.id) },
+                onUnload: { tab.unloadWebView() },
                 onMute: { onMuteTab(tab) }
             )
         }

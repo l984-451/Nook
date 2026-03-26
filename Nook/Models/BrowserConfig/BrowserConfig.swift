@@ -40,9 +40,12 @@ class BrowserConfiguration {
         // Enable Picture-in-Picture for web media
         config.preferences.setValue(true, forKey: "allowsPictureInPictureMediaPlayback")
 
-        // Enable full-screen API support and media devices
+        // Enable full-screen API support
         config.preferences.setValue(true, forKey: "allowsInlineMediaPlayback")
-        config.preferences.setValue(true, forKey: "mediaDevicesEnabled")
+        // NOTE: "mediaDevicesEnabled" intentionally NOT set — it causes the WebContent
+        // process to eagerly register with com.apple.audio.AudioComponentRegistrar,
+        // which is sandbox-denied for third-party WKWebView apps and crashes the process.
+        // getUserMedia still works through WKUIDelegate permission prompts without this.
 
         // CRITICAL: Enable HTML5 Fullscreen API
         config.preferences.isElementFullscreenEnabled = true
@@ -102,12 +105,6 @@ class BrowserConfiguration {
         config.websiteDataStore = profile.dataStore
 
         return config
-    }
-
-    // Returns a profile-scoped configuration with cache/perf optimizations applied.
-    // Media and PiP preferences are inherited from the base webViewConfiguration via .copy().
-    func cacheOptimizedWebViewConfiguration(for profile: Profile) -> WKWebViewConfiguration {
-        return webViewConfiguration(for: profile)
     }
 
     // MARK: - Chrome Web Store Integration

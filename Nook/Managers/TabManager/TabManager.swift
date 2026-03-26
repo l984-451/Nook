@@ -1022,6 +1022,16 @@ class TabManager: ObservableObject {
         debouncedPersistSnapshot()
     }
 
+    /// Removes a pinned tab, bypassing the normal guard that protects pinned tabs from removal.
+    /// Unpins the tab first, then removes it.
+    func forceRemoveTab(_ id: UUID) {
+        if let tab = tabById(id) {
+            tab.isSpacePinned = false
+            tab.isPinned = false
+        }
+        removeTab(id)
+    }
+
     func removeTab(_ id: UUID) {
         // Pinned/space-pinned tabs should not be removed — just deactivate them
         if let tab = tabById(id),
@@ -1517,6 +1527,10 @@ class TabManager: ObservableObject {
             // Now safe to move
             removeFromCurrentContainer(tab)
             tab.spaceId = nil
+            tab.isPinned = true
+            tab.isSpacePinned = false
+            tab.folderId = nil
+            if tab.pinnedURL == nil { tab.pinnedURL = tab.url }
             withCurrentProfilePinnedArray { arr in
                 let safeIndex = max(0, min(operation.toIndex, arr.count))
                 arr.insert(tab, at: safeIndex)
@@ -1529,6 +1543,10 @@ class TabManager: ObservableObject {
             // Now safe to move
             removeFromCurrentContainer(tab)
             tab.spaceId = nil
+            tab.isPinned = true
+            tab.isSpacePinned = false
+            tab.folderId = nil
+            if tab.pinnedURL == nil { tab.pinnedURL = tab.url }
             withCurrentProfilePinnedArray { arr in
                 let safeIndex = max(0, min(operation.toIndex, arr.count))
                 arr.insert(tab, at: safeIndex)
@@ -1539,6 +1557,9 @@ class TabManager: ObservableObject {
             // Essentials -> Regular (specific space): direct transfer without side-effect moves
             removeFromCurrentContainer(tab) // remove from global pinned
             tab.spaceId = spaceId
+            tab.isPinned = false
+            tab.isSpacePinned = false
+            tab.pinnedURL = nil
             var arr = tabsBySpace[spaceId] ?? []
             let safeIndex = max(0, min(operation.toIndex, arr.count))
             arr.insert(tab, at: safeIndex)
@@ -1551,6 +1572,9 @@ class TabManager: ObservableObject {
             // Essentials -> Space Pinned (specific space): direct transfer
             removeFromCurrentContainer(tab) // remove from global pinned
             tab.spaceId = spaceId
+            tab.isPinned = false
+            tab.isSpacePinned = true
+            if tab.pinnedURL == nil { tab.pinnedURL = tab.url }
             var sp = spacePinnedTabs[spaceId] ?? []
             let safeIndex = max(0, min(operation.toIndex, sp.count))
             sp.insert(tab, at: safeIndex)
@@ -1767,6 +1791,8 @@ class TabManager: ObservableObject {
         
         // Add to target space
         tab.spaceId = toSpaceId
+        tab.isPinned = false
+        tab.isSpacePinned = asSpacePinned
         if asSpacePinned {
             var spacePinned = spacePinnedTabs[toSpaceId] ?? []
             tab.index = toIndex
@@ -1990,6 +2016,7 @@ class TabManager: ObservableObject {
         setSpacePinnedTabs(spacePinned, for: spaceId)
 
         unpinned.pinnedURL = nil
+        unpinned.isSpacePinned = false
 
         // Add to regular tabs in the same space
         var regularTabs = tabsBySpace[spaceId] ?? []

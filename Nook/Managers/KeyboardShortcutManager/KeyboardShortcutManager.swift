@@ -538,11 +538,6 @@ class KeyboardShortcutManager {
                 NotificationCenter.default.post(name: .organizeTabsRequested, object: nil)
             }
 
-            NotificationCenter.default.post(
-                name: .shortcutExecuted,
-                object: nil,
-                userInfo: ["action": action]
-            )
         }
     }
 
@@ -573,7 +568,5 @@ class KeyboardShortcutManager {
 
 // MARK: - Notification
 extension Notification.Name {
-    static let shortcutExecuted = Notification.Name("shortcutExecuted")
-    static let shortcutsChanged = Notification.Name("shortcutsChanged")
     static let organizeTabsRequested = Notification.Name("organizeTabsRequested")
 }

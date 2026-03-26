@@ -7,7 +7,6 @@
 
 import AppKit
 import SwiftUI
-import UniversalGlass
 import Garnish
 
 struct CommandPaletteView: View {
@@ -255,9 +254,7 @@ struct CommandPaletteView: View {
                         .frame(width: effectiveCommandPaletteWidth)
                         .background(Color(.windowBackgroundColor).opacity(0.35))
                         .clipShape(.rect(cornerRadius: 26))
-                        .universalGlassEffect(
-                            .regular.tint(Color(.windowBackgroundColor).opacity(0.35)),
-                            in: .rect(cornerRadius: 26))
+                        .nookGlassEffect(in: .rect(cornerRadius: 26))
                         .animation(
                             .easeInOut(duration: 0.15),
                             value: searchManager.suggestions.count

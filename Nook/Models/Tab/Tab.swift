@@ -105,8 +105,13 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         label: "favicon.cache", attributes: .concurrent)
     private static let faviconCacheLock = NSLock()
 
-    /// Whether a favicon fetch has been requested for the current URL (prevents duplicate fetches)
-    private var faviconFetchRequested: Bool = false
+    /// Whether a real favicon has been successfully loaded (prevents redundant fetches)
+    private var hasFavicon: Bool = false
+    /// Whether a favicon fetch is currently in-flight (prevents concurrent fetches)
+    private var faviconFetchInFlight: Bool = false
+    /// Number of failed fetch attempts for the current URL host (caps retries)
+    private var faviconFetchAttempts: Int = 0
+    private static let maxFaviconRetries = 3
 
     // Persistent cache storage
     private static let faviconCacheDirectory: URL = {
@@ -205,6 +210,9 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     
     // Track the last domain/subdomain we sampled color for
     private var lastSampledDomain: String? = nil
+    private var lastTopBarDomain: String? = nil
+    private var lastFallbackInjectionURL: String? = nil
+    private var pendingThemeColorUpdate: DispatchWorkItem? = nil
 
     // MARK: - Rename State
     @Published var isRenaming: Bool = false
@@ -463,7 +471,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         let resolvedProfile = resolveProfile()
         let configuration: WKWebViewConfiguration
         if let profile = resolvedProfile {
-            configuration = BrowserConfiguration.shared.cacheOptimizedWebViewConfiguration(
+            configuration = BrowserConfiguration.shared.webViewConfiguration(
                 for: profile)
         } else {
             // Edge case: currentProfile not yet available. Delay creating WKWebView until it resolves.
@@ -764,6 +772,10 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         hasPlayingAudio = false
         // Note: isAudioMuted is preserved to maintain user's mute preference
 
+        // Reset favicon state so the new URL gets its own favicon
+        hasFavicon = false
+        faviconFetchAttempts = 0
+
         if newURL.isFileURL {
             // Grant read access to the containing directory for local resources
             let directoryURL = newURL.deletingLastPathComponent()
@@ -942,6 +954,16 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
                 // Track current URL for navigation detection
                 window.__NookCurrentURL = window.location.href;
 
+                // Throttle for timeupdate events — these fire ~4-15/sec during video
+                // playback but we only need to check state at most once per second.
+                let __nookLastMediaCheckTime = 0;
+                function throttledCheckMediaState() {
+                    const now = Date.now();
+                    if (now - __nookLastMediaCheckTime < 1000) return;
+                    __nookLastMediaCheckTime = now;
+                    checkMediaState();
+                }
+
                 function resetSoundTracking() {
                     window.webkit.messageHandlers[handlerName].postMessage({
                         hasAudioContent: false,
@@ -1107,10 +1129,16 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
                 }
 
                 function addAudioListeners(element) {
-                    ['play', 'pause', 'ended', 'loadedmetadata', 'canplay', 'volumechange', 'timeupdate'].forEach(event => {
+                    // State-change events: check quickly
+                    ['play', 'pause', 'ended', 'loadedmetadata', 'canplay', 'volumechange'].forEach(event => {
                         element.addEventListener(event, function() {
                             setTimeout(checkMediaState, 50);
                         });
+                    });
+                    // timeupdate fires ~4-15/sec during playback — use throttled
+                    // version to avoid flooding Swift with identical state messages
+                    element.addEventListener('timeupdate', function() {
+                        throttledCheckMediaState();
                     });
 
                     try {
@@ -1388,10 +1416,8 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         browserManager?.setMuteState(
             muted, for: id, originatingWindowId: browserManager?.windowRegistry?.activeWindow?.id)
 
-        // Update our internal state
-        DispatchQueue.main.async { [weak self] in
-            self?.isAudioMuted = muted
-        }
+        // Update our internal state (already on main thread via @MainActor)
+        isAudioMuted = muted
     }
 
     // MARK: - Native Audio Monitoring
@@ -1697,7 +1723,14 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         context: UnsafeMutableRawPointer?
     ) {
         if keyPath == "themeColor", let webView = object as? WKWebView {
-            updateBackgroundColor(from: webView)
+            // Debounce — themeColor KVO fires multiple times during page load
+            pendingThemeColorUpdate?.cancel()
+            let item = DispatchWorkItem { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                self.updateBackgroundColor(from: webView)
+            }
+            pendingThemeColorUpdate = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
         } else if keyPath == "canGoBack" || keyPath == "canGoForward",
             let webView = object as? WKWebView
         {
@@ -1722,17 +1755,15 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
               let currentDomain = extractDomain(from: currentURL) else {
             // If no URL/domain, still try theme color but skip pixel sampling
             if #available(macOS 12.0, *), let themeColor = webView.themeColor {
-                DispatchQueue.main.async { [weak self] in
-                    self?.pageBackgroundColor = themeColor
-                    webView.underPageBackgroundColor = themeColor
-                }
+                pageBackgroundColor = themeColor
+                webView.underPageBackgroundColor = themeColor
             }
             return
         }
-        
+
         // Only sample if domain changed or we haven't sampled yet
         let shouldSample = lastSampledDomain != currentDomain
-        
+
         var newColor: NSColor? = nil
 
         if #available(macOS 12.0, *) {
@@ -1740,13 +1771,11 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         }
 
         if let themeColor = newColor {
-            DispatchQueue.main.async { [weak self] in
-                self?.pageBackgroundColor = themeColor
-                webView.underPageBackgroundColor = themeColor
-                // Update sampled domain even for theme color
-                if shouldSample {
-                    self?.lastSampledDomain = currentDomain
-                }
+            pageBackgroundColor = themeColor
+            webView.underPageBackgroundColor = themeColor
+            // Update sampled domain even for theme color
+            if shouldSample {
+                lastSampledDomain = currentDomain
             }
         } else if shouldSample {
             // Only extract via pixel sampling if domain changed
@@ -1772,18 +1801,16 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         configuration.snapshotWidth = 1
 
         webView.takeSnapshot(with: configuration) { [weak self, weak webView] image, error in
+            // takeSnapshot completion runs on main thread; no dispatch needed
             guard let self = self, let webView = webView else { return }
 
             if let color = image?.singlePixelColor {
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    self.pageBackgroundColor = color
-                    webView.underPageBackgroundColor = color
-                    // Update sampled domain after successful extraction
-                    if let currentURL = webView.url,
-                       let currentDomain = self.extractDomain(from: currentURL) {
-                        self.lastSampledDomain = currentDomain
-                    }
+                self.pageBackgroundColor = color
+                webView.underPageBackgroundColor = color
+                // Update sampled domain after successful extraction
+                if let currentURL = webView.url,
+                   let currentDomain = self.extractDomain(from: currentURL) {
+                    self.lastSampledDomain = currentDomain
                 }
             } else {
                 self.runLegacyBackgroundColorScript(on: webView)
@@ -1829,6 +1856,13 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     }
     
     private func extractTopBarColor(from webView: WKWebView) {
+        // Only sample once per domain
+        if let currentURL = webView.url,
+           let domain = extractDomain(from: currentURL) {
+            if lastTopBarDomain == domain { return }
+            lastTopBarDomain = domain
+        }
+
         guard let sampleRect = topRightPixelRect(for: webView) else {
             return
         }
@@ -1840,11 +1874,9 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         
         webView.takeSnapshot(with: configuration) { [weak self] image, error in
             guard let self = self else { return }
-            
+
             if let color = image?.singlePixelColor {
-                DispatchQueue.main.async {
-                    self.topBarBackgroundColor = color
-                }
+                self.topBarBackgroundColor = color
             }
         }
     }
@@ -2169,6 +2201,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         let newName = title.isEmpty ? url.host ?? "New Tab" : title
         // Only update if title actually changed to prevent redundant redraws
         guard newName != self.name else { return }
+        objectWillChange.send()
         self.name = newName
         if #available(macOS 15.5, *) {
             ExtensionManager.shared.notifyTabPropertiesChanged(self, properties: [.title])
@@ -2177,19 +2210,20 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
 
     // MARK: - Favicon Logic
 
-    /// Lazily triggers a favicon fetch if one hasn't been requested yet for the current URL.
+    /// Lazily triggers a favicon fetch if one hasn't been loaded yet.
     /// Called when the tab becomes visible in the sidebar or when the webview is loaded.
+    /// Retries up to maxFaviconRetries times for failed fetches.
     func ensureFaviconLoaded() {
-        guard !faviconFetchRequested else { return }
-        faviconFetchRequested = true
+        guard !hasFavicon, !faviconFetchInFlight else { return }
+        guard faviconFetchAttempts < Self.maxFaviconRetries else { return }
+        faviconFetchInFlight = true
         Task { @MainActor in
             await fetchAndSetFavicon(for: url)
+            faviconFetchInFlight = false
         }
     }
 
     private func fetchAndSetFavicon(for url: URL) async {
-        // Mark that a fetch has been done for this URL cycle
-        faviconFetchRequested = true
         let defaultFavicon = SwiftUI.Image(systemName: "globe")
 
         // Skip favicon fetching for non-web schemes
@@ -2208,6 +2242,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         if let memoryCached = Self.getMemoryCachedFavicon(for: cacheKey) {
             await MainActor.run {
                 self.favicon = memoryCached
+                self.hasFavicon = true
             }
             return
         }
@@ -2216,36 +2251,71 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         if let diskCached = await Self.getDiskCachedFavicon(for: cacheKey) {
             await MainActor.run {
                 self.favicon = diskCached
+                self.hasFavicon = true
             }
             return
         }
 
+        faviconFetchAttempts += 1
+
+        // Try FaviconFinder (parses HTML <link> tags, then falls back to /favicon.ico)
+        if let nsImage = await Self.fetchFaviconImage(for: url) {
+            let swiftUIImage = SwiftUI.Image(nsImage: nsImage)
+            Self.cacheFavicon(swiftUIImage, for: cacheKey)
+            Self.saveFaviconToDisk(nsImage, for: cacheKey)
+
+            await MainActor.run {
+                self.favicon = swiftUIImage
+                self.hasFavicon = true
+            }
+            return
+        }
+
+        // FaviconFinder failed — try direct /favicon.ico as last resort
+        // (handles sites where HTML <link> tags point to 403'd paths but root favicon works)
+        if let rootFaviconURL = URL(string: "/favicon.ico", relativeTo: url)?.absoluteURL,
+           let nsImage = await Self.downloadImage(from: rootFaviconURL) {
+            let swiftUIImage = SwiftUI.Image(nsImage: nsImage)
+            Self.cacheFavicon(swiftUIImage, for: cacheKey)
+            Self.saveFaviconToDisk(nsImage, for: cacheKey)
+
+            await MainActor.run {
+                self.favicon = swiftUIImage
+                self.hasFavicon = true
+            }
+            return
+        }
+
+        await MainActor.run {
+            self.favicon = defaultFavicon
+            // hasFavicon stays false — allows retry on next ensureFaviconLoaded()
+        }
+    }
+
+    // MARK: - Favicon Network Helpers
+
+    /// Attempt to fetch a favicon using FaviconFinder (HTML parsing + ICO fallback).
+    private static func fetchFaviconImage(for url: URL) async -> NSImage? {
         do {
             let favicon = try await FaviconFinder(url: url)
                 .fetchFaviconURLs()
                 .download()
                 .largest()
-
-            if let faviconImage = favicon.image {
-                let nsImage = faviconImage.image
-                let swiftUIImage = SwiftUI.Image(nsImage: nsImage)
-
-                // Cache the favicon in memory and persist to disk (async barrier write)
-                Self.cacheFavicon(swiftUIImage, for: cacheKey)
-                Self.saveFaviconToDisk(nsImage, for: cacheKey)
-
-                await MainActor.run {
-                    self.favicon = swiftUIImage
-                }
-            } else {
-                await MainActor.run {
-                    self.favicon = defaultFavicon
-                }
-            }
+            return favicon.image?.image
         } catch {
-            await MainActor.run {
-                self.favicon = defaultFavicon
-            }
+            return nil
+        }
+    }
+
+    /// Download an image directly from a URL. Used as a last-resort fallback.
+    private static func downloadImage(from url: URL) async -> NSImage? {
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else { return nil }
+            return NSImage(data: data)
+        } catch {
+            return nil
         }
     }
 
@@ -2291,7 +2361,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         // Fast path: memory cache
         if let cached = Self.getMemoryCachedFavicon(for: cacheKey) {
             self.favicon = cached
-            self.faviconFetchRequested = true
+            self.hasFavicon = true
             return
         }
 
@@ -2300,8 +2370,9 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             // Promote to memory cache
             Self.cacheFavicon(diskCached, for: cacheKey)
             self.favicon = diskCached
-            self.faviconFetchRequested = true
+            self.hasFavicon = true
         }
+        // If not in cache, hasFavicon stays false → ensureFaviconLoaded() will fetch from network
     }
 
     static func cacheFavicon(_ favicon: SwiftUI.Image, for key: String) {
@@ -2416,7 +2487,9 @@ extension Tab: WKNavigationDelegate {
                 if let newDomain = extractDomain(from: newURL),
                    newDomain != lastSampledDomain {
                     lastSampledDomain = nil
+                    lastTopBarDomain = nil
                 }
+                lastFallbackInjectionURL = nil
                 // Update URL but don't persist yet - wait for navigation to complete
                 self.url = newURL
             } else {
@@ -2475,8 +2548,12 @@ extension Tab: WKNavigationDelegate {
             // CHROME WEB STORE INTEGRATION: Inject script after navigation
             injectWebStoreScriptIfNeeded(for: newURL, in: webView)
 
-            // CONTENT BLOCKER: Fallback scriptlet injection
-            browserManager?.contentBlockerManager.injectFallbackScripts(for: newURL, in: webView, tab: self)
+            // CONTENT BLOCKER: Fallback scriptlet injection (skip if already injected for this URL)
+            let urlString = newURL.absoluteString
+            if lastFallbackInjectionURL != urlString {
+                lastFallbackInjectionURL = urlString
+                browserManager?.contentBlockerManager.injectFallbackScripts(for: newURL, in: webView, tab: self)
+            }
         }
 
         // CRITICAL: Update navigation state after back/forward navigation
@@ -2484,33 +2561,30 @@ extension Tab: WKNavigationDelegate {
 
         webView.evaluateJavaScript("document.title") {
             [weak self] result, error in
+            // evaluateJavaScript completion runs on main thread; no dispatch needed
             if let title = result as? String {
-                DispatchQueue.main.async {
-                    self?.updateTitle(title)
+                self?.updateTitle(title)
 
-                    // Add to profile-aware history after title is updated
-                    if let currentURL = webView.url {
-                        let profile = self?.resolveProfile()
-                        let profileId = profile?.id ?? self?.browserManager?.currentProfile?.id
-                        let isEphemeral = profile?.isEphemeral ?? false
-                        self?.browserManager?.historyManager.addVisit(
-                            url: currentURL,
-                            title: title,
-                            timestamp: Date(),
-                            tabId: self?.id,
-                            profileId: profileId,
-                            isEphemeral: isEphemeral
-                        )
-                    }
-
-                    // Persist tab changes after navigation completes (only once)
-                    self?.browserManager?.tabManager.persistSnapshot()
+                // Add to profile-aware history after title is updated
+                if let currentURL = webView.url {
+                    let profile = self?.resolveProfile()
+                    let profileId = profile?.id ?? self?.browserManager?.currentProfile?.id
+                    let isEphemeral = profile?.isEphemeral ?? false
+                    self?.browserManager?.historyManager.addVisit(
+                        url: currentURL,
+                        title: title,
+                        timestamp: Date(),
+                        tabId: self?.id,
+                        profileId: profileId,
+                        isEphemeral: isEphemeral
+                    )
                 }
-            } else if let jsError = error {
+
+                // Persist tab changes after navigation completes (only once)
+                self?.browserManager?.tabManager.persistSnapshot()
+            } else if error != nil {
                 // Still persist even if title fetch failed, since URL was updated
-                DispatchQueue.main.async {
-                    self?.browserManager?.tabManager.persistSnapshot()
-                }
+                self?.browserManager?.tabManager.persistSnapshot()
             }
         }
 
@@ -2582,8 +2656,10 @@ extension Tab: WKNavigationDelegate {
 
         // Hard stop after 4 crashes in a 30-second window — the system is in a bad state
         // (e.g., XPC services unavailable after sleep/wake) and retrying is making it worse.
+        // Load about:blank to stop WebKit from reloading the crashing content into respawned processes.
         guard webProcessCrashCount <= 4 else {
-            NSLog("[Tab] Giving up on tab %@ after %d consecutive crashes", id.uuidString, webProcessCrashCount)
+            NSLog("[Tab] Giving up on tab %@ after %d consecutive crashes — loading blank to break crash loop", id.uuidString, webProcessCrashCount)
+            webView.load(URLRequest(url: URL(string: "about:blank")!))
             return
         }
 
@@ -2795,90 +2871,87 @@ extension Tab: WKScriptMessageHandler {
     public func userContentController(
         _ userContentController: WKUserContentController, didReceive message: WKScriptMessage
     ) {
+        // WKScriptMessageHandler callbacks run on main thread; no dispatch needed
         switch message.name {
         case "linkHover":
             let href = message.body as? String
-            DispatchQueue.main.async {
-                self.onLinkHover?(href)
-            }
+            self.onLinkHover?(href)
 
         case "commandHover":
             let href = message.body as? String
-            DispatchQueue.main.async {
-                self.onCommandHover?(href)
-            }
+            self.onCommandHover?(href)
 
         case "commandClick":
             if let href = message.body as? String, let url = URL(string: href) {
-                DispatchQueue.main.async {
-                    self.handleCommandClick(url: url)
-                }
+                self.handleCommandClick(url: url)
             }
 
         case "pipStateChange":
             if let dict = message.body as? [String: Any], let active = dict["active"] as? Bool {
-                DispatchQueue.main.async {
-                    self.hasPiPActive = active
-                }
+                self.hasPiPActive = active
             }
 
         case let name where name.hasPrefix("mediaStateChange_"):
             if let dict = message.body as? [String: Bool] {
-                DispatchQueue.main.async {
-                    self.hasPlayingVideo = dict["hasPlayingVideo"] ?? false
-                    self.hasVideoContent = dict["hasVideoContent"] ?? false
-                    self.hasAudioContent = dict["hasAudioContent"] ?? false
-                    self.hasPlayingAudio = dict["hasPlayingAudio"] ?? false
-                    // Don't override isAudioMuted - it's managed by toggleMute()
-                }
+                // Only set @Published properties when values actually change.
+                // @Published fires objectWillChange on every set (even same value),
+                // which causes cascading SwiftUI re-renders and video black flashes.
+                let newPlayingVideo = dict["hasPlayingVideo"] ?? false
+                let newVideoContent = dict["hasVideoContent"] ?? false
+                let newAudioContent = dict["hasAudioContent"] ?? false
+                let newPlayingAudio = dict["hasPlayingAudio"] ?? false
+
+                if self.hasPlayingVideo != newPlayingVideo { self.hasPlayingVideo = newPlayingVideo }
+                if self.hasVideoContent != newVideoContent { self.hasVideoContent = newVideoContent }
+                if self.hasAudioContent != newAudioContent { self.hasAudioContent = newAudioContent }
+                if self.hasPlayingAudio != newPlayingAudio { self.hasPlayingAudio = newPlayingAudio }
             }
 
         case let name where name.hasPrefix("backgroundColor_"):
             if let dict = message.body as? [String: String],
                 let colorHex = dict["backgroundColor"]
             {
-                DispatchQueue.main.async {
-                    self.pageBackgroundColor = NSColor(hex: colorHex)
-                    if let webView = self._webView, let color = NSColor(hex: colorHex) {
-                        webView.underPageBackgroundColor = color
-                        // Update sampled domain after successful extraction
-                        if let currentURL = webView.url,
-                           let currentDomain = self.extractDomain(from: currentURL) {
-                            self.lastSampledDomain = currentDomain
-                        }
+                self.pageBackgroundColor = NSColor(hex: colorHex)
+                if let webView = self._webView, let color = NSColor(hex: colorHex) {
+                    webView.underPageBackgroundColor = color
+                    // Update sampled domain after successful extraction
+                    if let currentURL = webView.url,
+                       let currentDomain = self.extractDomain(from: currentURL) {
+                        self.lastSampledDomain = currentDomain
                     }
                 }
             }
-            
 
         case "historyStateDidChange":
             if let href = message.body as? String, let url = URL(string: href) {
-                DispatchQueue.main.async {
-                    if self.url.absoluteString != url.absoluteString {
-                        self.url = url
-                        self.browserManager?.syncTabAcrossWindows(self.id)
+                if self.url.absoluteString != url.absoluteString {
+                    self.url = url
+                    // NOTE: Do NOT call syncTabAcrossWindows here. SPA navigations
+                    // (pushState/replaceState/popstate) happen inside the webview — the
+                    // content is already at the correct state. Calling syncTab would see a
+                    // URL mismatch (webView.url lags behind the JS-driven URL change) and
+                    // force webView.load(), causing a full page reload that breaks SPA
+                    // back/forward (e.g., Facebook lightbox close via browser back).
 
-                        // Fetch updated title after SPA navigation
-                        message.webView?.evaluateJavaScript("document.title") { [weak self] result, _ in
-                            if let title = result as? String, !title.isEmpty {
-                                DispatchQueue.main.async {
-                                    self?.updateTitle(title)
-                                }
-                            }
+                    // Fetch updated title after SPA navigation
+                    message.webView?.evaluateJavaScript("document.title") { [weak self] result, _ in
+                        // evaluateJavaScript completion runs on main thread
+                        if let title = result as? String, !title.isEmpty {
+                            self?.updateTitle(title)
                         }
+                    }
 
-                        // Fetch favicon for new URL
-                        Task { @MainActor [weak self] in
-                            await self?.fetchAndSetFavicon(for: url)
-                        }
+                    // Fetch favicon for new URL
+                    Task { @MainActor [weak self] in
+                        await self?.fetchAndSetFavicon(for: url)
+                    }
 
-                        // Debounce persistence for SPA navigation to avoid excessive writes
-                        self.spaPersistDebounceTask?.cancel()
-                        self.spaPersistDebounceTask = Task { [weak self] in
-                            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
-                            guard !Task.isCancelled else { return }
-                            self?.browserManager?.tabManager.persistSnapshot()
-                        }
+                    // Debounce persistence for SPA navigation to avoid excessive writes
+                    self.spaPersistDebounceTask?.cancel()
+                    self.spaPersistDebounceTask = Task { [weak self] in
+                        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+                        guard !Task.isCancelled else { return }
+                        self?.browserManager?.tabManager.persistSnapshot()
                     }
                 }
             }

@@ -143,11 +143,21 @@ struct ExtensionLibraryView: View {
                         .toggleStyle(.switch)
                         .controlSize(.mini)
                         .onChange(of: contentBlockerEnabled) { _, enabled in
-                            browserManager.contentBlockerManager.allowDomain(host, allowed: !enabled)
+                            // Use currentHost (not captured host) to always reference the active tab
+                            guard let activeHost = currentHost else { return }
+                            // Skip if the state already matches (e.g. during sync from tab switch)
+                            let isAllowed = browserManager.contentBlockerManager.isDomainAllowed(activeHost)
+                            guard (!enabled) != isAllowed else { return }
+                            browserManager.contentBlockerManager.allowDomain(activeHost, allowed: !enabled)
                         }
                 }
                 .onAppear {
                     contentBlockerEnabled = !browserManager.contentBlockerManager.isDomainAllowed(host)
+                }
+                .onChange(of: currentHost) { _, newHost in
+                    if let h = newHost {
+                        contentBlockerEnabled = !browserManager.contentBlockerManager.isDomainAllowed(h)
+                    }
                 }
             }
 

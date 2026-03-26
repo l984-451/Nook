@@ -9,6 +9,7 @@ import SwiftUI
 
 struct StageFooter: View {
     var currentStage: Int
+    var totalStages: Int = 3
     var isLoading: Bool = false
     var onContinue: () -> Void
     var onBack: () -> Void
@@ -23,17 +24,17 @@ struct StageFooter: View {
     }
 
     var primaryText: String {
-        if(isLoading) {
+        if isLoading {
             return "Importing data..."
+        } else if currentStage == totalStages - 1 {
+            return "Start browsing"
         } else {
             switch currentStage {
             case 0: return "Get Started"
             case 1: return "Move your data"
-            case 7: return "Start browsing"
             default: return "Continue"
             }
         }
-
     }
 
     var body: some View {

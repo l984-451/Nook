@@ -24,7 +24,7 @@ struct PeekWebView: NSViewRepresentable {
         let configuration: WKWebViewConfiguration
         if let profileId = session.sourceProfileId,
            let profile = peekManager?.browserManager?.profileManager.profiles.first(where: { $0.id == profileId }) {
-            configuration = BrowserConfiguration.shared.cacheOptimizedWebViewConfiguration(for: profile)
+            configuration = BrowserConfiguration.shared.webViewConfiguration(for: profile)
         } else {
             // Fallback to default configuration
             configuration = BrowserConfiguration.shared.webViewConfiguration

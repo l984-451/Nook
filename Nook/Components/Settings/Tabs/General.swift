@@ -13,7 +13,6 @@ struct SettingsGeneralTab: View {
     @Environment(\.nookSettings) var nookSettings
     @State private var showingAddSite = false
     @State private var showingAddEngine = false
-    @State private var showingAdBlockerInfo = false
 
     var body: some View {
         @Bindable var settings = nookSettings
@@ -23,35 +22,16 @@ struct SettingsGeneralTab: View {
                 Toggle("Warn before quitting Nook", isOn: $settings.askBeforeQuit)
                 Toggle("Automatically update Nook", isOn: .constant(true))
                     .disabled(true)
-                Toggle(isOn: $settings.adBlockerEnabled) {
-                    HStack(spacing: 4) {
-                        Text("Nook's Ad Blocker")
-                        Button {
-                            showingAdBlockerInfo.toggle()
-                        } label: {
-                            Image(systemName: "info.circle")
-                                .font(.caption)
-                                .foregroundStyle(.secondary.opacity(0.6))
-                        }
-                        .buttonStyle(.plain)
-                        .popover(isPresented: $showingAdBlockerInfo, arrowEdge: .trailing) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Nook's Ad Blocker")
-                                    .font(.headline)
-                                Text("Built on uBlock Origin's community-maintained filter lists, adapted for WebKit. Blocks ads, trackers, and annoyances using network-level filtering, cosmetic hiding, and scriptlet injection — including YouTube ad blocking.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Text("Filter lists update automatically every 24 hours.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(12)
-                            .frame(width: 280)
-                        }
-                    }
-                }
-                .onChange(of: nookSettings.adBlockerEnabled) { _, enabled in
-                    browserManager.contentBlockerManager.setEnabled(enabled)
+                HStack {
+                    Image(systemName: "shield.checkered")
+                        .foregroundStyle(nookSettings.adBlockerEnabled ? .green : .secondary)
+                    Text("Ad & Tracker Blocker")
+                    Spacer()
+                    Text(nookSettings.adBlockerEnabled ? "On" : "Off")
+                        .foregroundStyle(.secondary)
+                    Text("— Privacy Settings")
+                        .font(.caption)
+                        .foregroundStyle(.secondary.opacity(0.6))
                 }
 
                 Section(header: Text("Search")) {

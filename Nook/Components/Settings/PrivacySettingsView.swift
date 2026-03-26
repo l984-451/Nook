@@ -16,6 +16,7 @@ struct PrivacySettingsView: View {
     @State private var showingCookieManager = false
     @State private var showingCacheManager = false
     @State private var isClearing = false
+    @State private var isUpdatingFilters = false
 
     var body: some View {
         @Bindable var settings = nookSettings
@@ -141,30 +142,23 @@ struct PrivacySettingsView: View {
             
             // Content Blocking Section
             VStack(alignment: .leading, spacing: 12) {
-                Text("Content Blocking")
+                Text("Ad & Tracker Blocking")
                     .font(.headline)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack {
+                    Toggle(isOn: $settings.adBlockerEnabled) {
                         Text("Ad & Tracker Blocker")
-                        Spacer()
-                        if nookSettings.adBlockerEnabled {
-                            Text("Enabled")
-                                .font(.caption)
-                                .foregroundStyle(.green)
-                        } else {
-                            Text("Disabled")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                    }
+                    .onChange(of: nookSettings.adBlockerEnabled) { _, enabled in
+                        browserManager.contentBlockerManager.setEnabled(enabled)
                     }
 
                     if nookSettings.adBlockerEnabled {
                         HStack {
-                            if browserManager.contentBlockerManager.isCompiling {
+                            if isUpdatingFilters {
                                 ProgressView()
                                     .scaleEffect(0.7)
-                                Text("Compiling filter rules...")
+                                Text("Updating filter lists...")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             } else {
@@ -175,8 +169,10 @@ struct PrivacySettingsView: View {
                                 }
                                 Spacer()
                                 Button("Update Filters") {
+                                    isUpdatingFilters = true
                                     Task {
                                         await browserManager.contentBlockerManager.recompileFilterLists()
+                                        isUpdatingFilters = false
                                     }
                                 }
                                 .buttonStyle(.bordered)
@@ -185,7 +181,7 @@ struct PrivacySettingsView: View {
                         }
                     }
 
-                    Text("Toggle in General settings. Filter lists update automatically every 24 hours.")
+                    Text("Filter lists update automatically every 24 hours.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

@@ -75,7 +75,7 @@ struct SpacesList: View {
                                 removal: .scale.combined(with: .opacity)
                             ))
                             
-                            if index != Array(visibleSpaces.enumerated()).count - 1{
+                            if index != visibleSpaces.count - 1 {
                                 Spacer()
                                     .frame(minWidth: 1, maxWidth: 8)
                                     .layoutPriority(-1)
@@ -106,7 +106,6 @@ struct SpacesList: View {
                     }
             }
             .animation(.easeInOut(duration: 0.3), value: visibleSpaces.count)
-            .animation(.easeInOut(duration: 0.3), value: visibleSpaces.map(\.id))
     }
 
     private var previewTextColor: Color {

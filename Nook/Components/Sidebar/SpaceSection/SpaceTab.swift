@@ -11,6 +11,7 @@ struct SpaceTab: View {
     @ObservedObject var tab: Tab
     var action: () -> Void
     var onClose: () -> Void
+    var onUnload: (() -> Void)? = nil
     var onMute: () -> Void
     @State private var isHovering: Bool = false
     @State private var isCloseHovering: Bool = false
@@ -89,11 +90,13 @@ struct SpaceTab: View {
 
 
                 if isHovering {
-                    Button(action: onClose) {
-                        Image(systemName: "xmark")
+                    // Space-pinned loaded tabs: show "-" to unload; unloaded: show "x" to remove
+                    let useUnload = onUnload != nil && !tab.isUnloaded
+                    Button(action: useUnload ? onUnload! : onClose) {
+                        Image(systemName: useUnload ? "minus" : "xmark")
                             .font(.system(size: 12, weight: .heavy))
                             .foregroundColor(textTab)
-                            .frame(width: 24,height: 24)
+                            .frame(width: 24, height: 24)
                             .background(isCloseHovering ? (isCurrentTab ? AppColors.controlBackgroundHoverLight : AppColors.controlBackgroundActive) : Color.clear)
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                     }

@@ -9,7 +9,6 @@
 //
 
 import SwiftUI
-import UniversalGlass
 
 // MARK: - Shortcut Conflict Toast View
 
