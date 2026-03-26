@@ -109,5 +109,17 @@
       length="30876522"
       type="application/octet-stream"/>
   </item>
+  <item>
+    <title>Version 1.2.0</title>
+    <sparkle:releaseNotesLink>https://github.com/l984-451/Nook/releases/tag/v1.2.0</sparkle:releaseNotesLink>
+    <pubDate>Thu, 26 Mar 2026 15:58:28 +0000</pubDate>
+    <enclosure
+      url="https://github.com/l984-451/Nook/releases/download/v1.2.0/Nook-v1.2.0.dmg"
+      sparkle:version="120"
+      sparkle:shortVersionString="1.2.0"
+      sparkle:edSignature="jeAiTwNUnbA6URQ9r8NiA5kh+OkRvqDQfHQVVlOaFmCp4M/PPeTOS+eI7NYY/DUA8fPpFQllFtVytrUXiDqnBw=="
+      length="30235689"
+      type="application/octet-stream"/>
+  </item>
 </channel>
 </rss>
