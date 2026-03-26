@@ -16,20 +16,24 @@ class SiteRoutingManager {
     // MARK: - Matching
 
     func resolve(url: URL) -> SiteRoutingRule? {
-        guard let settingsService,
-              let host = url.host?.lowercased().replacingOccurrences(of: "www.", with: "")
-        else { return nil }
+        guard let settingsService else { return nil }
+        var host = url.host?.lowercased() ?? ""
+        if host.hasPrefix("www.") { host = String(host.dropFirst(4)) }
+        guard !host.isEmpty else { return nil }
 
         let rules = settingsService.siteRoutingRules.filter { $0.isEnabled && $0.domain == host }
         guard !rules.isEmpty else { return nil }
 
         let path = url.path
-        if let specific = rules.first(where: { prefix in
-            guard let pp = prefix.pathPrefix, !pp.isEmpty else { return false }
+        // Most-specific rule wins: longest matching pathPrefix takes priority
+        let pathMatches = rules.filter { rule in
+            guard let pp = rule.pathPrefix, !pp.isEmpty else { return false }
             return path.hasPrefix(pp)
-        }) {
+        }
+        if let specific = pathMatches.max(by: { ($0.pathPrefix?.count ?? 0) < ($1.pathPrefix?.count ?? 0) }) {
             return specific
         }
+        // Fall back to domain-only rule (no pathPrefix)
         return rules.first(where: { $0.pathPrefix == nil || $0.pathPrefix?.isEmpty == true })
     }
 

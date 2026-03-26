@@ -2749,13 +2749,16 @@ extension Tab: WKNavigationDelegate {
         }
 
         // Air Traffic Control — route cross-domain navigations to designated spaces
-        if let url = navigationAction.request.url,
-           let currentHost = self.url.host?.lowercased().replacingOccurrences(of: "www.", with: ""),
-           let destHost = url.host?.lowercased().replacingOccurrences(of: "www.", with: ""),
-           currentHost != destHost,
-           browserManager?.siteRoutingManager.applyRoute(url: url, from: self) == true {
-            decisionHandler(.cancel)
-            return
+        if let url = navigationAction.request.url {
+            var currentHost = self.url.host?.lowercased() ?? ""
+            if currentHost.hasPrefix("www.") { currentHost = String(currentHost.dropFirst(4)) }
+            var destHost = url.host?.lowercased() ?? ""
+            if destHost.hasPrefix("www.") { destHost = String(destHost.dropFirst(4)) }
+            if !currentHost.isEmpty && !destHost.isEmpty && currentHost != destHost,
+               browserManager?.siteRoutingManager.applyRoute(url: url, from: self) == true {
+                decisionHandler(.cancel)
+                return
+            }
         }
 
         decisionHandler(.allow)
