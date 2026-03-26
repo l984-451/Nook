@@ -76,9 +76,9 @@ struct NookApp: App {
         }
 
 
-        // Native macOS Settings window
-        Settings {
-            SettingsView()
+        // macOS 26 style sidebar settings window
+        Window("Nook Settings", id: "nook-settings") {
+            SettingsWindow()
                 .environmentObject(browserManager)
                 .environmentObject(browserManager.tabManager)
                 .environmentObject(browserManager.gradientColorManager)
@@ -88,6 +88,8 @@ struct NookApp: App {
                 .environment(mcpManager)
                 .environment(tabOrganizerManager)
         }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
     }
 
     // MARK: - Application Lifecycle Setup

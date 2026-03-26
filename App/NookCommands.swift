@@ -15,7 +15,6 @@ struct NookCommands: Commands {
     let shortcutManager: KeyboardShortcutManager
     let tabOrganizerManager: TabOrganizerManager
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
     @Environment(\.nookSettings) var nookSettings
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
@@ -82,6 +81,14 @@ struct NookCommands: Commands {
         CommandGroup(replacing: .newItem) {}
         CommandGroup(replacing: .windowList) {}
 
+        // Replace the native Settings menu item to open our custom sidebar settings window
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings...") {
+                openWindow(id: "nook-settings")
+            }
+            .keyboardShortcut(",", modifiers: .command)
+        }
+
         // Replace the standard Quit menu item to route through showQuitDialog(),
         // which respects the "warn before quitting" setting
         CommandGroup(replacing: .appTermination) {
@@ -121,6 +128,11 @@ struct NookCommands: Commands {
                 browserManager.undoCloseTab()
             }
             .modifier(dynamicShortcut(.undoCloseTab))
+
+            Button("Reopen Closed Tab") {
+                browserManager.undoCloseTab()
+            }
+            .keyboardShortcut("t", modifiers: [.command, .shift])
         }
 
         // File Section
@@ -360,8 +372,8 @@ struct NookCommands: Commands {
                     .modifier(dynamicShortcut(.installExtension))
 
                     Button("Manage Extensions...") {
-                        openSettings()
                         nookSettings.currentSettingsTab = .extensions
+                        openWindow(id: "nook-settings")
                     }
 
                     Divider()
