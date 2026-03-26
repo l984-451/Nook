@@ -91,6 +91,8 @@ private struct SettingsDetailPane: View {
                 SettingsAdBlockerTab()
             case .sponsorBlock:
                 SettingsSponsorBlockTab()
+            case .airTrafficControl:
+                AirTrafficControlSettingsView()
             case .profiles:
                 ProfilesSettingsView()
             case .shortcuts:

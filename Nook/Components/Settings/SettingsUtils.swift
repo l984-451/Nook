@@ -14,6 +14,7 @@ enum SettingsTabs: String, Hashable, CaseIterable {
     case privacy
     case adBlocker
     case sponsorBlock
+    case airTrafficControl
     case profiles
     case shortcuts
     case extensions
@@ -27,6 +28,7 @@ enum SettingsTabs: String, Hashable, CaseIterable {
         case .privacy: return "Privacy"
         case .adBlocker: return "Ad Blocker"
         case .sponsorBlock: return "SponsorBlock"
+        case .airTrafficControl: return "Air Traffic Control"
         case .profiles: return "Profiles"
         case .shortcuts: return "Shortcuts"
         case .extensions: return "Extensions"
@@ -42,6 +44,7 @@ enum SettingsTabs: String, Hashable, CaseIterable {
         case .privacy: return "lock.shield"
         case .adBlocker: return "shield.lefthalf.filled"
         case .sponsorBlock: return "forward.end.alt"
+        case .airTrafficControl: return "arrow.triangle.branch"
         case .profiles: return "person.crop.circle"
         case .shortcuts: return "keyboard"
         case .extensions: return "puzzlepiece.extension"
@@ -57,6 +60,7 @@ enum SettingsTabs: String, Hashable, CaseIterable {
         case .privacy: return .blue
         case .adBlocker: return .green
         case .sponsorBlock: return .orange
+        case .airTrafficControl: return .mint
         case .profiles: return .cyan
         case .shortcuts: return .indigo
         case .extensions: return .teal
@@ -69,7 +73,7 @@ enum SettingsTabs: String, Hashable, CaseIterable {
         var groups: [[SettingsTabs]] = [
             [.general, .appearance],
             [.ai],
-            [.privacy, .adBlocker, .sponsorBlock],
+            [.privacy, .adBlocker, .sponsorBlock, .airTrafficControl],
             [.profiles, .shortcuts, .extensions],
         ]
         #if DEBUG
