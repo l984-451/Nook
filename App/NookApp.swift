@@ -135,6 +135,8 @@ struct NookApp: App {
         browserManager.windowRegistry = windowRegistry
         browserManager.nookSettings = settingsManager
         browserManager.tabManager.nookSettings = settingsManager
+        browserManager.siteRoutingManager.settingsService = settingsManager
+        browserManager.siteRoutingManager.browserManager = browserManager
         browserManager.aiService = aiService
         browserManager.aiConfigService = aiConfigService
 

@@ -416,6 +416,7 @@ class BrowserManager: ObservableObject {
     weak var aiService: AIService?
     weak var aiConfigService: AIConfigService?
 
+    var siteRoutingManager = SiteRoutingManager()
     var externalMiniWindowManager = ExternalMiniWindowManager()
     @Published var peekManager = PeekManager()
 
