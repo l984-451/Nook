@@ -51,6 +51,8 @@ class NookSettingsService {
     private let tabOrganizerEnabledKey = "settings.tabOrganizerEnabled"
     private let tabOrganizerModelDownloadedKey = "settings.tabOrganizerModelDownloaded"
     private let tabOrganizerIdleTimeoutKey = "settings.tabOrganizerIdleTimeout"
+    private let sponsorBlockEnabledKey = "settings.sponsorBlockEnabled"
+    private let sponsorBlockCategoryOptionsKey = "settings.sponsorBlockCategoryOptions"
 
     var currentSettingsTab: SettingsTabs = .general
 
@@ -309,6 +311,21 @@ class NookSettingsService {
         }
     }
 
+    var sponsorBlockEnabled: Bool {
+        didSet {
+            userDefaults.set(sponsorBlockEnabled, forKey: sponsorBlockEnabledKey)
+        }
+    }
+
+    /// Per-category skip options: category rawValue → skip option rawValue ("auto", "manual", "disabled")
+    var sponsorBlockCategoryOptions: [String: String] {
+        didSet {
+            if let data = try? JSONEncoder().encode(sponsorBlockCategoryOptions) {
+                userDefaults.set(data, forKey: sponsorBlockCategoryOptionsKey)
+            }
+        }
+    }
+
     init() {
         // Register default values
         userDefaults.register(defaults: [
@@ -340,6 +357,7 @@ class NookSettingsService {
             tabOrganizerEnabledKey: false,
             tabOrganizerModelDownloadedKey: false,
             tabOrganizerIdleTimeoutKey: 300.0,
+            sponsorBlockEnabledKey: false,
         ])
 
         // Initialize properties from UserDefaults
@@ -422,6 +440,13 @@ class NookSettingsService {
         self.tabOrganizerEnabled = userDefaults.bool(forKey: tabOrganizerEnabledKey)
         self.tabOrganizerModelDownloaded = userDefaults.bool(forKey: tabOrganizerModelDownloadedKey)
         self.tabOrganizerIdleTimeout = userDefaults.double(forKey: tabOrganizerIdleTimeoutKey)
+        self.sponsorBlockEnabled = userDefaults.bool(forKey: sponsorBlockEnabledKey)
+        if let sbData = userDefaults.data(forKey: sponsorBlockCategoryOptionsKey),
+           let sbDecoded = try? JSONDecoder().decode([String: String].self, from: sbData) {
+            self.sponsorBlockCategoryOptions = sbDecoded
+        } else {
+            self.sponsorBlockCategoryOptions = SponsorBlockCategory.defaultCategoryOptions
+        }
 
         if let data = userDefaults.data(forKey: siteSearchEntriesKey),
            let decoded = try? JSONDecoder().decode([SiteSearchEntry].self, from: data) {

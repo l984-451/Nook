@@ -570,6 +570,8 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
                 forName: "nookShortcutDetect")
             _webView?.configuration.userContentController.removeScriptMessageHandler(
                 forName: "nookAdBlocker")
+            _webView?.configuration.userContentController.removeScriptMessageHandler(
+                forName: "nookSponsorBlock")
 
             // Add handlers
             _webView?.configuration.userContentController.add(self, name: "linkHover")
@@ -584,6 +586,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             _webView?.configuration.userContentController.add(self, name: "NookIdentity")
             _webView?.configuration.userContentController.add(self, name: "nookShortcutDetect")
             _webView?.configuration.userContentController.add(self, name: "nookAdBlocker")
+            _webView?.configuration.userContentController.add(self, name: "nookSponsorBlock")
 
             // Add Web Store integration handler for Chrome Web Store extension installs
             if let browserManager = browserManager {
@@ -2720,6 +2723,9 @@ extension Tab: WKNavigationDelegate {
 
             // Setup content blocker scripts before navigation starts
             browserManager?.contentBlockerManager.setupContentBlockerScripts(for: url, in: webView, tab: self)
+
+            // Inject SponsorBlock script (independent of content blocker)
+            browserManager?.sponsorBlockManager.injectScriptIfNeeded(for: url, in: webView)
         }
 
         // Check for Option+click to trigger Peek for any link
@@ -2985,6 +2991,31 @@ extension Tab: WKScriptMessageHandler {
                         if (overlay) overlay.style.setProperty('display', 'none', 'important');
                     })()
                     """)
+            }
+
+        case "nookSponsorBlock":
+            if let body = message.body as? [String: Any],
+               let type = body["type"] as? String
+            {
+                switch type {
+                case "video-changed":
+                    if let videoID = body["videoID"] as? String {
+                        Task { @MainActor [weak self] in
+                            guard let webView = message.webView else { return }
+                            let segments = await self?.browserManager?.sponsorBlockManager
+                                .fetchSegments(for: videoID) ?? []
+                            self?.browserManager?.sponsorBlockManager
+                                .deliverSegments(segments, to: webView)
+                        }
+                    }
+                case "segment-skipped":
+                    // Telemetry: report viewed segment to SponsorBlock
+                    if let uuid = body["uuid"] as? String {
+                        browserManager?.sponsorBlockManager.reportViewedSegment(uuid: uuid)
+                    }
+                default:
+                    break
+                }
             }
 
         default:

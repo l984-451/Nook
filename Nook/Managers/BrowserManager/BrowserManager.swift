@@ -405,6 +405,7 @@ class BrowserManager: ObservableObject {
     var splitManager: SplitViewManager
     var gradientColorManager: GradientColorManager
     var contentBlockerManager: ContentBlockerManager
+    var sponsorBlockManager: SponsorBlockManager
     var findManager: FindManager
     var importManager: ImportManager
     var zoomManager = ZoomManager()
@@ -530,6 +531,7 @@ class BrowserManager: ObservableObject {
         self.splitManager = SplitViewManager()
         self.gradientColorManager = GradientColorManager()
         self.contentBlockerManager = ContentBlockerManager()
+        self.sponsorBlockManager = SponsorBlockManager()
         self.findManager = FindManager()
         self.importManager = ImportManager()
 
@@ -558,6 +560,7 @@ class BrowserManager: ObservableObject {
             self.gradientColorManager.setImmediate(.default)
         }
         self.contentBlockerManager.attach(browserManager: self)
+        self.sponsorBlockManager.browserManager = self
         // Note: tracking protection will be configured after settingsManager injection
 
         self.externalMiniWindowManager.attach(browserManager: self)

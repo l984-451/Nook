@@ -34,8 +34,10 @@ class BrowserConfiguration {
         config.preferences.setValue(true, forKey: "javaScriptCanAccessClipboard")
         config.preferences.setValue(true, forKey: "DOMPasteAllowed")
 
-        // Media settings
-        config.mediaTypesRequiringUserActionForPlayback = [.audio]
+        // Media settings — use macOS default (no restrictions, matching Safari behavior).
+        // [.audio] blocks programmatic play() for media with audio tracks, which breaks
+        // YouTube autoplay since SPA navigations call play() outside user-gesture context.
+        config.mediaTypesRequiringUserActionForPlayback = []
         
         // Enable Picture-in-Picture for web media
         config.preferences.setValue(true, forKey: "allowsPictureInPictureMediaPlayback")
@@ -62,8 +64,30 @@ class BrowserConfiguration {
         #endif
 
         // Note: webExtensionController will be set by ExtensionManager during initialization
-        // Note: WebAuthn/Passkey support is enabled by default in WKWebView on macOS 13.3+
-        // and requires only: entitlements, WKUIDelegate methods, and Info.plist descriptions
+
+        // MARK: Passkey suppression
+        // Pending Apple approval of com.apple.developer.web-browser.public-key-credential,
+        // tell websites we don't support platform authenticators so they won't prompt for passkeys.
+        // TODO: Remove this once the entitlement is granted.
+        let passkeySuppress = WKUserScript(
+            source: """
+            (function() {
+                if (window.PublicKeyCredential) {
+                    PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = function() {
+                        return Promise.resolve(false);
+                    };
+                    if (PublicKeyCredential.isConditionalMediationAvailable) {
+                        PublicKeyCredential.isConditionalMediationAvailable = function() {
+                            return Promise.resolve(false);
+                        };
+                    }
+                }
+            })();
+            """,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        )
+        config.userContentController.addUserScript(passkeySuppress)
 
         return config
     }()
