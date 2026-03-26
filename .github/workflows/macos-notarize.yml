@@ -53,6 +53,9 @@ jobs:
           echo "SIGNING_IDENTITY=$IDENTITY" >> $GITHUB_ENV
           echo "Using signing identity: $IDENTITY"
 
+      - name: Ensure Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
       - name: Build app
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
