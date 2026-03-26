@@ -87,6 +87,16 @@ struct NookCommands: Commands {
                 openWindow(id: "nook-settings")
             }
             .keyboardShortcut(",", modifiers: .command)
+
+            Button("Import from another Browser") {
+                browserManager.dialogManager.showDialog(
+                    BrowserImportDialog(
+                        onCancel: {
+                            browserManager.dialogManager.closeDialog()
+                        }
+                    )
+                )
+            }
         }
 
         // Replace the standard Quit menu item to route through showQuitDialog(),
@@ -104,23 +114,12 @@ struct NookCommands: Commands {
             Button("Make Nook Default Browser") {
                 browserManager.setAsDefaultBrowser()
             }
-            
+
             Button("Check for Updates...") {
                 appDelegate.updaterController.checkForUpdates(nil)
             }
         }
         
-        CommandGroup(after: .appSettings) {
-            Button("Import from another Browser") {
-                browserManager.dialogManager.showDialog(
-                    BrowserImportDialog(
-                        onCancel: {
-                            browserManager.dialogManager.closeDialog()
-                        }
-                    )
-                )
-            }
-        }
 
         // Edit Section
         CommandGroup(replacing: .undoRedo) {
