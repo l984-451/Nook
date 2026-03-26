@@ -92,7 +92,7 @@ private struct SplitHalfTab: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
                             .buttonStyle(PlainButtonStyle())
-                            .onHover { state in
+                            .onHoverTracking { state in
                                 isCloseHovering = state
                             }
                         }
@@ -102,7 +102,7 @@ private struct SplitHalfTab: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
-                .onHover { hovering in
+                .onHoverTracking { hovering in
                     withAnimation(.easeInOut(duration: 0.15)) {
                         isHovering = hovering
                     }

@@ -170,7 +170,7 @@ struct SpaceView: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("TabFoldersDidChange"))) { _ in
             folderChangeCount += 1
         }
-        .onHover { state in
+        .onHoverTracking { state in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovered = state
             }

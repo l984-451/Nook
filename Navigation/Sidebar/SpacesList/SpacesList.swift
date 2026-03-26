@@ -82,7 +82,7 @@ struct SpacesList: View {
                             }
                         }
                     }
-                    .onHover { hovering in
+                    .onHoverTracking { hovering in
                         isHoveringList = hovering
                         if !hovering {
                             showPreview = false

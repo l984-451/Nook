@@ -248,7 +248,7 @@ struct TopBarView: View {
             value: urlBarBackgroundColor
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .onHover { hovering in
+        .onHoverTracking { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovering = hovering
             }
@@ -565,7 +565,7 @@ struct ChatButton: View {
             )
         }
         .buttonStyle(.plain)
-        .onHover { state in
+        .onHoverTracking { state in
             isHovered = state
         }
 

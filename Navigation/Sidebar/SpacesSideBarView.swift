@@ -33,7 +33,7 @@ struct SpacesSideBarView: View {
     var body: some View {
         sidebarContent
             .contentShape(Rectangle())
-            .onHover { state in
+            .onHoverTracking { state in
                 isSidebarHovered = state
             }
             .contextMenu {
@@ -230,7 +230,7 @@ struct SpacesSideBarView: View {
 
     private var downloadsMenuOverlay: some View {
         SidebarMenuHoverDownloads(isVisible: animateDownloadsMenu)
-            .onHover { isHovered in
+            .onHoverTracking { isHovered in
                 isDownloadsHovered = isHovered
                 if isHovered {
                     showDownloadsMenu = true

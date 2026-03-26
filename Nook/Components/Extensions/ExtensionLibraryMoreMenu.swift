@@ -321,6 +321,6 @@ private struct MoreMenuItem: View {
         .padding(.vertical, 8)
         .background(isHovering ? Color.secondary.opacity(0.07) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .onHover { isHovering = $0 }
+        .onHoverTracking { isHovering = $0 }
     }
 }

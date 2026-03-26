@@ -35,7 +35,7 @@ struct NavButtonStyle: ButtonStyle {
         .scaleEffect(configuration.isPressed && isEnabled ? 0.95 : 1.0)
         .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
         .animation(.easeInOut(duration: 0.15), value: isHovering)
-        .onHover { hovering in
+        .onHoverTracking { hovering in
             isHovering = hovering
         }
     }
@@ -88,7 +88,7 @@ struct RectNavButtonStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed && isEnabled ? 0.95 : 1.0)
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
             .animation(.easeInOut(duration: 0.15), value: isHovering)
-            .onHover { hovering in
+            .onHoverTracking { hovering in
                 isHovering = hovering
             }
     }

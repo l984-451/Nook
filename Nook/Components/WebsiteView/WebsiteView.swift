@@ -963,7 +963,7 @@ private struct SplitControlsOverlay: View {
                     .contentShape(Rectangle())
                     .frame(width: gap, height: totalHeight)
                     .position(x: x, y: totalHeight / 2)
-                    .onHover { hovering in
+                    .onHoverTracking { hovering in
                         if hovering { NSCursor.resizeLeftRight.set() } else { NSCursor.arrow.set() }
                     }
                     .gesture(

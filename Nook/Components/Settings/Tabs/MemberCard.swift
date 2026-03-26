@@ -80,7 +80,7 @@ struct SocialButon: View {
             .foregroundStyle(isHovered ? .white : .white.opacity(0.6))
         }
         .buttonStyle(.plain)
-        .onHover { state in
+        .onHoverTracking { state in
             isHovered = state
         }
     }

@@ -177,7 +177,7 @@ struct MediaControlsView: View {
                 )
                 .padding(.horizontal, 8)
                 .frame(maxWidth: .infinity)
-                .onHover { hovering in
+                .onHoverTracking { hovering in
                     withAnimation(.easeInOut(duration: 0.15)) {
                         isHovering = hovering
                     }

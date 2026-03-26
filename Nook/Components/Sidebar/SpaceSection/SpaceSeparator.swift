@@ -41,7 +41,7 @@ struct SpaceSeparator: View {
                     .buttonStyle(PlainButtonStyle())
                     .help("Organize tabs with AI")
                     .transition(.blur.animation(.smooth(duration: 0.08)))
-                    .onHover { state in
+                    .onHoverTracking { state in
                         isOrganizeHovered = state
                     }
                 }
@@ -67,7 +67,7 @@ struct SpaceSeparator: View {
                 .buttonStyle(PlainButtonStyle())
                 .help("Clear all regular tabs")
                 .transition(.blur.animation(.smooth(duration: 0.08)))
-                .onHover { state in
+                .onHoverTracking { state in
                     isClearHovered = state
                 }
             }

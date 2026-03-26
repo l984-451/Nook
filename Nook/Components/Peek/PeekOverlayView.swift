@@ -285,7 +285,7 @@ struct PeekOverlayView: View {
             .disabled(disabled)
             .buttonStyle(PlainButtonStyle())
             .scaleEffect(disabled ? 0.9 : 1.0)
-            .onHover { hovering in
+            .onHoverTracking { hovering in
                 isHovering = hovering
                 if hovering {
                     NSCursor.pointingHand.set()

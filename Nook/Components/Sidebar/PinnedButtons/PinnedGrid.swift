@@ -152,7 +152,7 @@ struct PinnedGrid: View {
                                             hasNavigatedAway: tab.hasNavigatedAwayFromPinnedURL
                                         )
                                         .environmentObject(browserManager)
-                                        .onHover { hovering in
+                                        .onHoverTracking { hovering in
                                             browserManager.hoveredPinnedTabId = hovering ? tab.id : nil
                                         }
                                     }

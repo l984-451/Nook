@@ -74,7 +74,7 @@ struct NookButtonStyle: ButtonStyle {
         .opacity(isEnabled ? 1.0 : disabledOpacity)
         .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
         .animation(.easeInOut(duration: 0.15), value: isHovering)
-        .onHover { hovering in
+        .onHoverTracking { hovering in
             isHovering = hovering
         }
     }

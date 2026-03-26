@@ -368,7 +368,7 @@ struct CommandPaletteView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
                         .contentShape(RoundedRectangle(cornerRadius: 6))
-                        .onHover { hovering in
+                        .onHoverTracking { hovering in
                             withAnimation(.easeInOut(duration: 0.12)) {
                                 if hovering {
                                     hoveredIndex = index

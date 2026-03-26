@@ -45,7 +45,7 @@ struct SidebarBottomBar: View {
             .labelStyle(.iconOnly)
             .buttonStyle(NavButtonStyle())
             .foregroundStyle(Color.primary)
-            .onHover { isHovered in
+            .onHoverTracking { isHovered in
                 isMenuButtonHovered = isHovered
                 onMenuHover(isHovered)
             }

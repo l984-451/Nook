@@ -56,7 +56,7 @@ struct SpacesListItem: View {
         .foregroundStyle(Color.primary)
         .layoutPriority(isActive ? 1 : 0)
         .opacity(isFaded ? 0.3 : 1.0)
-        .onHover { hovering in
+        .onHoverTracking { hovering in
             isHovering = hovering
             onHoverChange?(hovering)
         }
@@ -217,7 +217,7 @@ struct SpaceListItemButtonStyle: ButtonStyle {
         .scaleEffect(configuration.isPressed && isEnabled ? 0.95 : 1.0)
         .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
         .animation(.easeInOut(duration: 0.15), value: isHovering)
-        .onHover { hovering in
+        .onHoverTracking { hovering in
             isHovering = hovering
         }
     }

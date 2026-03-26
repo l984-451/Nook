@@ -76,7 +76,7 @@ struct ExtensionActionButton: View {
         }
         .buttonStyle(.plain)
         .help(ext.name)
-        .onHover { state in
+        .onHoverTracking { state in
             isHovering = state
         }
         .onAppear { refreshBadge() }

@@ -61,7 +61,7 @@ struct SidebarResizeView: View {
                         browserManager.updateSidebarWidth(defaultWidth, for: windowState)
                     }
                 }
-                .onHover { hovering in
+                .onHoverTracking { hovering in
                     guard windowState.isSidebarVisible else { return }
 
                     hoverTask?.cancel()

@@ -27,7 +27,7 @@ struct SidebarHoverOverlayView: View {
                 Color.clear
                     .frame(width: hoverManager.triggerWidth)
                     .contentShape(Rectangle())
-                    .onHover { isIn in
+                    .onHoverTracking { isIn in
                         if isIn && !windowState.isSidebarVisible {
                             withAnimation(.easeInOut(duration: 0.12)) {
                                 hoverManager.isOverlayVisible = true

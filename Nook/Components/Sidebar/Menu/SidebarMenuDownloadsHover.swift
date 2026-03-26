@@ -227,7 +227,7 @@ struct SidebarMenuHoverDownloadItem: View {
         .background(isHovering ? .white.opacity(0.2) : .clear)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .animation(.easeInOut(duration: 0.1), value: isHovering)
-        .onHover { state in
+        .onHoverTracking { state in
             isHovering = state
         }
         .onTapGesture {

@@ -289,7 +289,7 @@ private struct MuteButton: View {
         }
         .buttonStyle(.plain)
         .disabled(tab == nil)
-        .onHover { isHovering = $0 }
+        .onHoverTracking { isHovering = $0 }
         .onAppear { isMuted = tab?.isAudioMuted ?? false }
         .onChange(of: tab?.isAudioMuted) { _, newValue in
             isMuted = newValue ?? false
@@ -336,7 +336,7 @@ private struct CopyButton: View {
             .clipShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHoverTracking { isHovering = $0 }
     }
 }
 
@@ -417,7 +417,7 @@ private struct ExtensionGridItem: View {
             }
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .onHoverTracking { isHovering = $0 }
         .onAppear { refreshBadge() }
         .contextMenu {
             if isPinned {
@@ -496,6 +496,6 @@ private struct SiteSettingRow<Control: View>: View {
         .padding(.vertical, 7)
         .background(isHovering ? Color.secondary.opacity(0.06) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .onHover { isHovering = $0 }
+        .onHoverTracking { isHovering = $0 }
     }
 }
