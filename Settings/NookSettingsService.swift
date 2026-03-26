@@ -53,6 +53,7 @@ class NookSettingsService {
     private let tabOrganizerIdleTimeoutKey = "settings.tabOrganizerIdleTimeout"
     private let sponsorBlockEnabledKey = "settings.sponsorBlockEnabled"
     private let sponsorBlockCategoryOptionsKey = "settings.sponsorBlockCategoryOptions"
+    private let siteRoutingRulesKey = "settings.siteRoutingRules"
 
     var currentSettingsTab: SettingsTabs = .general
 
@@ -80,6 +81,14 @@ class NookSettingsService {
         didSet {
             if let data = try? JSONEncoder().encode(customSearchEngines) {
                 userDefaults.set(data, forKey: customSearchEnginesKey)
+            }
+        }
+    }
+
+    var siteRoutingRules: [SiteRoutingRule] = [] {
+        didSet {
+            if let data = try? JSONEncoder().encode(siteRoutingRules) {
+                userDefaults.set(data, forKey: siteRoutingRulesKey)
             }
         }
     }
@@ -373,7 +382,14 @@ class NookSettingsService {
         } else {
             self.customSearchEngines = []
         }
-        
+
+        if let srData = userDefaults.data(forKey: siteRoutingRulesKey),
+           let decoded = try? JSONDecoder().decode([SiteRoutingRule].self, from: srData) {
+            self.siteRoutingRules = decoded
+        } else {
+            self.siteRoutingRules = []
+        }
+
         // Initialize tab management mode (with migration from old timeout)
         let resolvedMode: TabManagementMode
         if userDefaults.object(forKey: tabManagementModeKey) == nil,
