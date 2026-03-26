@@ -2748,6 +2748,16 @@ extension Tab: WKNavigationDelegate {
             return
         }
 
+        // Air Traffic Control — route cross-domain navigations to designated spaces
+        if let url = navigationAction.request.url,
+           let currentHost = self.url.host?.lowercased().replacingOccurrences(of: "www.", with: ""),
+           let destHost = url.host?.lowercased().replacingOccurrences(of: "www.", with: ""),
+           currentHost != destHost,
+           browserManager?.siteRoutingManager.applyRoute(url: url, from: self) == true {
+            decisionHandler(.cancel)
+            return
+        }
+
         decisionHandler(.allow)
     }
 
