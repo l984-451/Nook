@@ -697,16 +697,20 @@ class BrowserManager: ObservableObject {
         await profileOps.run { [weak self] in
             guard let self else { return }
             if self.isSwitchingProfile {
+                #if DEBUG
                 print("⏳ [BrowserManager] Ignoring concurrent profile switch request")
+                #endif
                 return
             }
             self.isSwitchingProfile = true
             defer { self.isSwitchingProfile = false }
 
             let previousProfile = self.currentProfile
+            #if DEBUG
             print(
                 "🔀 [BrowserManager] Switching to profile: \(profile.name) (\(profile.id.uuidString)) from: \(previousProfile?.name ?? "none")"
             )
+            #endif
             let animateTransition = context.shouldAnimateTransition
 
             let performUpdates = {
@@ -920,12 +924,18 @@ class BrowserManager: ObservableObject {
     }
 
     func duplicateCurrentTab() {
+        #if DEBUG
         print("🔧 [BrowserManager] duplicateCurrentTab called")
+        #endif
         guard let currentTab = currentTabForActiveWindow() else {
+            #if DEBUG
             print("🔧 [BrowserManager] No current tab found")
+            #endif
             return
         }
+        #if DEBUG
         print("🔧 [BrowserManager] Current tab: \(currentTab.name) - \(currentTab.url)")
+        #endif
 
         // Get the current space for the active window
         let targetSpace =
@@ -962,9 +972,11 @@ class BrowserManager: ObservableObject {
             selectTab(newTab)
         }
 
+        #if DEBUG
         print(
             "🔧 [BrowserManager] Duplicated tab created: \(newTab.name) - \(newTab.url) at index \(insertIndex)"
         )
+        #endif
     }
 
     func closeCurrentTab() {
@@ -1129,11 +1141,15 @@ class BrowserManager: ObservableObject {
     }
 
     func cleanupAllTabs() {
+        #if DEBUG
         print("🔄 [BrowserManager] Cleaning up all tabs")
+        #endif
         let allTabs = tabManager.pinnedTabs + tabManager.tabs
 
         for tab in allTabs {
+            #if DEBUG
             print("🔄 [BrowserManager] Cleaning up tab: \(tab.name)")
+            #endif
             tab.closeTab()
         }
     }
@@ -1278,37 +1294,49 @@ class BrowserManager: ObservableObject {
     // Profile-specific cleanup helpers
     func clearCurrentProfileCookies() {
         guard let pid = currentProfile?.id else { return }
+        #if DEBUG
         print("🧹 [BrowserManager] Clearing cookies for current profile: \(pid.uuidString)")
+        #endif
         Task { await cookieManager.deleteAllCookies() }
     }
 
     func clearCurrentProfileCache() {
         guard currentProfile?.id != nil else { return }
+        #if DEBUG
         print("🧹 [BrowserManager] Clearing cache for current profile")
+        #endif
         Task { await cacheManager.clearAllCache() }
     }
 
     func clearAllProfilesCookies() {
+        #if DEBUG
         print("🧹 [BrowserManager] Clearing cookies for ALL profiles (sequential, isolated)")
+        #endif
         let profiles = profileManager.profiles
         Task { @MainActor in
             for profile in profiles {
                 let cm = CookieManager(dataStore: profile.dataStore)
+                #if DEBUG
                 print(
                     "   → Clearing cookies for profile=\(profile.id.uuidString) [\(profile.name)]")
+                #endif
                 await cm.deleteAllCookies()
             }
         }
     }
 
     func performPrivacyCleanupAllProfiles() {
+        #if DEBUG
         print(
             "🧹 [BrowserManager] Performing privacy cleanup across ALL profiles (sequential, isolated)"
         )
+        #endif
         let profiles = profileManager.profiles
         Task { @MainActor in
             for profile in profiles {
+                #if DEBUG
                 print("   → Cleaning profile=\(profile.id.uuidString) [\(profile.name)]")
+                #endif
                 let cm = CookieManager(dataStore: profile.dataStore)
                 let cam = CacheManager(dataStore: profile.dataStore)
                 await cm.performPrivacyCleanup()
@@ -1335,10 +1363,14 @@ class BrowserManager: ObservableObject {
                 updated += 1
             }
             try modelContext.save()
+            #if DEBUG
             print(
                 "🔧 [BrowserManager] Assigned default profile to \(updated) legacy history entries")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ [BrowserManager] Failed to assign default profile to existing data: \(error)")
+            #endif
         }
     }
 
@@ -1435,13 +1467,17 @@ class BrowserManager: ObservableObject {
     // MARK: - URL Utilities
     func copyCurrentURL() {
         if let url = currentTabForActiveWindow()?.url.absoluteString {
+            #if DEBUG
             print("Attempting to copy URL: \(url)")
+            #endif
 
             NSPasteboard.general.clearContents()
             let success = NSPasteboard.general.setString(url, forType: .string)
             let e = NSHapticFeedbackManager.defaultPerformer
             e.perform(.generic, performanceTime: .drawCompleted)
+            #if DEBUG
             print("Clipboard operation success: \(success)")
+            #endif
 
             // Show toast on active window
             if let windowState = windowRegistry?.activeWindow {
@@ -1453,14 +1489,18 @@ class BrowserManager: ObservableObject {
                 }
             }
         } else {
+            #if DEBUG
             print("No URL found to copy")
+            #endif
         }
     }
 
     // MARK: - Web Inspector
     func openWebInspector() {
         guard let currentTab = currentTabForActiveWindow() else {
+            #if DEBUG
             print("No current tab to inspect")
+            #endif
             return
         }
 
@@ -1476,7 +1516,9 @@ class BrowserManager: ObservableObject {
             // Show an alert instructing the user how to open it manually
             showWebInspectorAlert()
         } else {
+            #if DEBUG
             print("Web inspector requires macOS 13.3 or later")
+            #endif
         }
     }
 
@@ -1725,7 +1767,9 @@ class BrowserManager: ObservableObject {
         // Ensure currentProfile is still valid
         if let cp = currentProfile, profileManager.profiles.first(where: { $0.id == cp.id }) == nil
         {
+            #if DEBUG
             print("⚠️ [BrowserManager] Current profile invalid; falling back to first available")
+            #endif
             currentProfile = profileManager.profiles.first
         }
         // Ensure spaces have profile assignments
@@ -1733,7 +1777,9 @@ class BrowserManager: ObservableObject {
     }
 
     func recoverFromProfileError(_ error: Error, profile: Profile?) {
+        #if DEBUG
         print("❗️[BrowserManager] Profile operation failed: \(error)")
+        #endif
         // Fallback to default/first profile
         if let first = profileManager.profiles.first {
             Task { await switchToProfile(first, context: .recovery) }
@@ -1918,7 +1964,9 @@ class BrowserManager: ObservableObject {
     /// Select a tab in the active window (convenience method for sidebar clicks)
     func selectTab(_ tab: Tab) {
         guard let activeWindow = windowRegistry?.activeWindow else {
+            #if DEBUG
             print("⚠️ [BrowserManager] No active window for tab selection")
+            #endif
             return
         }
         selectTab(tab, in: activeWindow)
@@ -1976,7 +2024,9 @@ class BrowserManager: ObservableObject {
         // DISABLED: Exclusive audio enforcement - use standard browser behavior instead
         // enforceExclusiveAudio(for: tab, activeWindowId: windowState.id)
 
+        #if DEBUG
         print("🪟 [BrowserManager] Selected tab \(tab.name) in window \(windowState.id)")
+        #endif
 
         // Update global tab state for the active window
         if windowRegistry?.activeWindow?.id == windowState.id {
@@ -1992,17 +2042,21 @@ class BrowserManager: ObservableObject {
             return windowState.ephemeralTabs
         }
         
+        #if DEBUG
         print("🔍 tabsForDisplay called for window \(windowState.id.uuidString.prefix(8))...")
+        #endif
 
         // Get tabs for the window's current space
         let currentSpace = windowState.currentSpaceId.flatMap { id in
             tabManager.spaces.first(where: { $0.id == id })
         }
 
+        #if DEBUG
         print("   - windowState.currentSpaceId: \(windowState.currentSpaceId?.uuidString ?? "nil")")
         print(
             "   - resolved currentSpace: \(currentSpace?.name ?? "nil") (id: \(currentSpace?.id.uuidString.prefix(8) ?? "nil"))"
         )
+        #endif
 
         let profileId =
             windowState.currentProfileId ?? currentSpace?.profileId ?? currentProfile?.id
@@ -2010,6 +2064,7 @@ class BrowserManager: ObservableObject {
         let spacePinned = currentSpace.map { tabManager.spacePinnedTabs(for: $0.id) } ?? []
         let regularTabs = currentSpace.map { tabManager.tabs(in: $0) } ?? []
 
+        #if DEBUG
         print("   - essentials: \(essentials.count) tabs")
         print("   - spacePinned: \(spacePinned.count) tabs")
         print("   - regularTabs: \(regularTabs.count) tabs")
@@ -2020,9 +2075,12 @@ class BrowserManager: ObservableObject {
                 "     * \(tab.name) (id: \(tab.id.uuidString.prefix(8))..., folderId: \(tab.folderId?.uuidString.prefix(8) ?? "nil"))"
             )
         }
+        #endif
 
         let result = essentials + spacePinned + regularTabs
+        #if DEBUG
         print("   - TOTAL tabsForDisplay: \(result.count)")
+        #endif
 
         return result
     }
@@ -2132,9 +2190,11 @@ class BrowserManager: ObservableObject {
             adoptProfileIfNeeded(for: windowState, context: .spaceChange)
         }
 
+        #if DEBUG
         print(
             "🪟 [BrowserManager] Set active space \(space.name) for window \(windowState.id), active tab: \(targetTab?.name ?? "none")"
         )
+        #endif
     }
 
     /// Validate and fix window states after tab/space mutations
@@ -2164,9 +2224,11 @@ class BrowserManager: ObservableObject {
             if windowState.currentTabId == nil {
                 if let managerCurrentTab = tabManager.currentTab, !managerCurrentTab.isUnloaded {
                     windowState.currentTabId = managerCurrentTab.id
+                    #if DEBUG
                     print(
                         "🔧 [validateWindowStates] Using TabManager's current tab: \(managerCurrentTab.name)"
                     )
+                    #endif
                 }
                 needsUpdate = true
             }
@@ -2200,7 +2262,9 @@ class BrowserManager: ObservableObject {
         let result = await importManager.importArcSidebarData()
 
         for space in result.spaces {
+            #if DEBUG
             print("========== \(space.title)")
+            #endif
             self.tabManager.createSpace(name: space.title, icon: space.emoji ?? "person.fill")
 
             guard
@@ -2212,17 +2276,23 @@ class BrowserManager: ObservableObject {
             }
 
             for tab in space.unpinnedTabs {
+                #if DEBUG
                 print("Unpinned tab - \(tab.title)")
+                #endif
                 self.tabManager.createNewTab(url: tab.url, in: createdSpace)
             }
 
             for tab in space.pinnedTabs {
+                #if DEBUG
                 print("Pinned tab - \(tab.title)")
+                #endif
                 let newtab = self.tabManager.createNewTab(url: tab.url, in: createdSpace)
                 self.tabManager.pinTabToSpace(newtab, spaceId: createdSpace.id)
             }
             for folder in space.folders {
+                #if DEBUG
                 print("Folder - \(folder.title)")
+                #endif
                 let newFolder = self.tabManager.createFolder(
                     for: createdSpace.id, name: folder.title)
 
@@ -2233,7 +2303,9 @@ class BrowserManager: ObservableObject {
             }
         }
         for topTab in result.topTabs {
+            #if DEBUG
             print("TopTab - \(topTab.title)")
+            #endif
             let tab = self.tabManager.createNewTab(
                 url: topTab.url, in: self.tabManager.spaces.first!)
             self.tabManager.addToEssentials(tab)
@@ -2246,13 +2318,17 @@ class BrowserManager: ObservableObject {
         guard let defaultSpace = self.tabManager.spaces.first else { return }
 
         for tab in result.favoriteTabs {
+            #if DEBUG
             print("Dia Favorite - \(tab.title)")
+            #endif
             let newTab = self.tabManager.createNewTab(url: tab.url, in: defaultSpace)
             self.tabManager.addToEssentials(newTab)
         }
 
         for tab in result.windowTabs {
+            #if DEBUG
             print("Dia Tab - \(tab.title)")
+            #endif
             self.tabManager.createNewTab(url: tab.url, in: defaultSpace)
         }
     }
@@ -2393,7 +2469,9 @@ class BrowserManager: ObservableObject {
     func createNewWindow() {
         guard let windowRegistry = windowRegistry,
               let webViewCoordinator = webViewCoordinator else {
+            #if DEBUG
             print("⚠️ [BrowserManager] Cannot create window - missing WindowRegistry or WebViewCoordinator")
+            #endif
             return
         }
 
@@ -2436,7 +2514,9 @@ class BrowserManager: ObservableObject {
     func createIncognitoWindow() {
         guard let windowRegistry = windowRegistry,
               let webViewCoordinator = webViewCoordinator else {
+            #if DEBUG
             print("⚠️ [BrowserManager] Cannot create incognito window - missing WindowRegistry or WebViewCoordinator")
+            #endif
             return
         }
 
@@ -2505,7 +2585,9 @@ class BrowserManager: ObservableObject {
         
         newWindow.makeKeyAndOrderFront(nil)
         
+        #if DEBUG
         print("🔒 [BrowserManager] Created incognito window: \(windowState.id)")
+        #endif
     }
     
     /// Close an incognito window and clean up all ephemeral data
@@ -2513,7 +2595,9 @@ class BrowserManager: ObservableObject {
     func closeIncognitoWindow(_ windowState: BrowserWindowState) async {
         guard windowState.isIncognito else { return }
         
+        #if DEBUG
         print("🔒 [BrowserManager] Closing incognito window: \(windowState.id)")
+        #endif
         
         // Step 1: Clean up all clone WebViews for ephemeral tabs from WebViewCoordinator
         // This is critical - clone WebViews hold references to the data store
@@ -2554,7 +2638,9 @@ class BrowserManager: ObservableObject {
         print("🔒 [BrowserManager] Incognito window closed. Ephemeral tabs: \(ephemeralTabs.count), spaces: \(ephemeralSpaces.count)")
         #endif
         
+        #if DEBUG
         print("🔒 [BrowserManager] Incognito window fully closed and cleaned up: \(windowState.id)")
+        #endif
     }
     
     /// Check if a tab can be dragged to a target window (block cross-window for incognito)

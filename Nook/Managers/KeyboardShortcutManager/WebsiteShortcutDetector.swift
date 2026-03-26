@@ -35,20 +35,12 @@ class WebsiteShortcutDetector {
     /// The timeout duration for double-press detection (1 second as specified)
     let conflictTimeout: TimeInterval = 1.0
     
-    /// Timer for cleaning up expired pending shortcuts
-    nonisolated(unsafe) private var cleanupTimer: Timer?
-    
     /// Weak reference to browser manager for notifications
     weak var browserManager: BrowserManager?
-    
+
     // MARK: - Initialization
-    
+
     init() {
-        startCleanupTimer()
-    }
-    
-    deinit {
-        cleanupTimer?.invalidate()
     }
     
     // MARK: - Public Interface
@@ -100,14 +92,17 @@ class WebsiteShortcutDetector {
         windowId: UUID,
         nookActionName: String
     ) -> Bool {
-        guard WebsiteShortcutProfile.isFeatureEnabled else { 
-            return false 
+        guard WebsiteShortcutProfile.isFeatureEnabled else {
+            return false
         }
-        
-        guard let websiteShortcut = isKnownWebsiteShortcut(keyCombination) else { 
-            return false 
+
+        guard let websiteShortcut = isKnownWebsiteShortcut(keyCombination) else {
+            return false
         }
-        
+
+        // Clean up expired entries on-demand instead of polling
+        cleanupExpiredPendingShortcuts()
+
         let now = Date()
         
         // Check if there's already a pending shortcut for this window
@@ -143,6 +138,7 @@ class WebsiteShortcutDetector {
     
     /// Check if there's a pending shortcut for the given window
     func hasPendingShortcut(for windowId: UUID) -> Bool {
+        cleanupExpiredPendingShortcuts()
         guard let pending = pendingShortcuts[windowId] else { return false }
         return Date().timeIntervalSince(pending.timestamp) <= conflictTimeout
     }
@@ -164,16 +160,7 @@ class WebsiteShortcutDetector {
     }
     
     // MARK: - Private Methods
-    
-    private func startCleanupTimer() {
-        // Clean up expired pending shortcuts every 500ms
-        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.cleanupExpiredPendingShortcuts()
-            }
-        }
-    }
-    
+
     private func cleanupExpiredPendingShortcuts() {
         let now = Date()
         let expiredWindows = pendingShortcuts.filter { now.timeIntervalSince($0.value.timestamp) > 1.5 }

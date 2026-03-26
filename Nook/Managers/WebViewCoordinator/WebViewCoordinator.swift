@@ -149,7 +149,7 @@ class WebViewCoordinator {
         } else {
             let resolvedProfile = tab.resolveProfile()
             if let profile = resolvedProfile {
-                configuration = BrowserConfiguration.shared.cacheOptimizedWebViewConfiguration(for: profile)
+                configuration = BrowserConfiguration.shared.webViewConfiguration(for: profile)
             } else {
                 configuration = BrowserConfiguration.shared.webViewConfiguration.copy() as! WKWebViewConfiguration
             }
@@ -282,7 +282,7 @@ class WebViewCoordinator {
         } else {
             let resolvedProfile = tab.resolveProfile()
             if let profile = resolvedProfile {
-                configuration = BrowserConfiguration.shared.cacheOptimizedWebViewConfiguration(for: profile)
+                configuration = BrowserConfiguration.shared.webViewConfiguration(for: profile)
             } else {
                 configuration = BrowserConfiguration.shared.webViewConfiguration.copy() as! WKWebViewConfiguration
             }

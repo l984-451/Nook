@@ -235,7 +235,6 @@
   // via evaluateJavaScript, which is invisible to YouTube's anti-adblock
 
   var adSkipInProgress = false;
-  var adPollTimer = null;
 
   function notifyNativeAdPlaying() {
     if (adSkipInProgress) return;
@@ -289,25 +288,6 @@
     return player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting');
   }
 
-  // Polling fallback: catches ads that slip past MutationObserver
-  function startAdPolling() {
-    if (adPollTimer) return;
-    adPollTimer = setInterval(function() {
-      if (isAdPlaying()) {
-        notifyNativeAdPlaying();
-        // Also try direct skip in case native handler is slow
-        skipAdDirect();
-      }
-    }, 300);
-  }
-
-  function stopAdPolling() {
-    if (adPollTimer) {
-      clearInterval(adPollTimer);
-      adPollTimer = null;
-    }
-  }
-
   function setupPlayerObserver() {
     var player = document.querySelector('#movie_player, .html5-video-player');
     if (!player) return false;
@@ -348,10 +328,7 @@
       notifyNativeAdPlaying();
     }
 
-    // Start polling as an extra safety net
-    startAdPolling();
-
-    console.log(TAG, 'Layer 3: player observer + polling installed');
+    console.log(TAG, 'Layer 3: player observer installed');
     return true;
   }
 
@@ -467,7 +444,6 @@
   function onSPANavigateStart() {
     // Reset skip state early so the new page starts fresh
     adSkipInProgress = false;
-    stopAdPolling();
   }
 
   function onSPANavigateFinish() {

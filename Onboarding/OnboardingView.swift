@@ -12,22 +12,18 @@ struct OnboardingView: View {
     @EnvironmentObject var browserManager: BrowserManager
 
     @State private var currentStage: Int = 0
-    @State private var selectedMaterial: NSVisualEffectView.Material = .hudWindow
     @State private var selectedBrowser: Browsers = .arc
-    @State private var aiChatEnabled: Bool = true
-    @State private var adBlockerEnabled: Bool = true
-    @State private var topBarAddressView: Bool = false
     @State private var isLoading: Bool = false
     @State private var showSafariImportFlow: Bool = false
 
     var body: some View {
         ZStack {
-            BlurEffectView(material: selectedMaterial, state: .active)
+            BlurEffectView(material: .hudWindow, state: .active)
                 .ignoresSafeArea()
             Color.white.opacity(0.2)
 
             VStack {
-                StageIndicator(stages: 7, activeStage: currentStage)
+                StageIndicator(stages: 3, activeStage: currentStage)
                 Spacer()
                 stageView
                     .transition(.slideAndBlur)
@@ -35,6 +31,7 @@ struct OnboardingView: View {
                 if !showSafariImportFlow {
                     StageFooter(
                         currentStage: currentStage,
+                        totalStages: 3,
                         isLoading: isLoading,
                         onContinue: advance,
                         onBack: goBack,
@@ -77,30 +74,17 @@ struct OnboardingView: View {
             switch currentStage {
             case 0: HelloStage()
             case 1: ImportStage(selectedBrowser: $selectedBrowser)
-            case 2: AiChatStage(aiChatEnabled: $aiChatEnabled)
-            case 3: AdBlockerStage(adBlockerEnabled: $adBlockerEnabled)
-            case 4: URLBarStage(topBarAddressView: $topBarAddressView)
-            case 5: BackgroundStage(selectedMaterial: $selectedMaterial)
-            case 6: FinalStage()
+            case 2: FinalStage()
             default: EmptyView()
             }
         }
     }
 
-    private func applySettings() {
-        nookSettings.showAIAssistant = aiChatEnabled
-        nookSettings.adBlockerEnabled = adBlockerEnabled
-        nookSettings.blockCrossSiteTracking = adBlockerEnabled
-        nookSettings.currentMaterial = selectedMaterial
-        nookSettings.topBarAddressView = topBarAddressView
-
-        nookSettings.didFinishOnboarding = true
-    }
-
     private func advance() {
-        guard currentStage < 7 else { return }
-        if currentStage == 6 {
-            applySettings()
+        guard currentStage < 3 else { return }
+        if currentStage == 2 {
+            nookSettings.didFinishOnboarding = true
+            return
         }
 
         if currentStage == 1 && selectedBrowser == .safari {

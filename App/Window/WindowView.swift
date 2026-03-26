@@ -7,7 +7,6 @@
 //
 
 import SwiftUI
-import UniversalGlass
 
 /// Main window view that orchestrates the browser UI layout
 struct WindowView: View {
@@ -182,10 +181,6 @@ struct WindowView: View {
             SpaceGradientBackgroundView()
 
 
-//            Rectangle()
-//                .fill(Color.clear)
-////                .universalGlassEffect(.regular.tint(Color(.windowBackgroundColor).opacity(0.35)), in: .rect(cornerRadius: 0))
-//                .clipped()
         }
         .backgroundDraggable()
         .environment(windowState)

@@ -235,10 +235,15 @@ struct BackgroundWindowModifier: NSViewRepresentable {
                 window.isReleasedWhenClosed = false
                 // window.isMovableByWindowBackground = true // Disabled - use SwiftUI-based window drag system instead
                 window.isMovable = true
-                window.styleMask = [
+                var mask: NSWindow.StyleMask = [
                     .titled, .closable, .miniaturizable, .resizable,
                     .fullSizeContentView,
                 ]
+                // Preserve fullScreen flag — removing it outside a transition crashes on macOS 15.5+
+                if window.styleMask.contains(.fullScreen) {
+                    mask.insert(.fullScreen)
+                }
+                window.styleMask = mask
 
                 window.minSize = NSSize(width: 470, height: 382)
                 window.contentMinSize = NSSize(width: 470, height: 382)

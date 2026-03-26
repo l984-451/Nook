@@ -8,21 +8,17 @@
 
 /* Begin PBXBuildFile section */
 		2C16A0262E87430B0070894B /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 2C16A0252E87430B0070894B /* Sparkle */; };
-		2D0822D82EC8A61800C302AC /* UniversalGlass in Frameworks */ = {isa = PBXBuildFile; productRef = 2D0822D72EC8A61800C302AC /* UniversalGlass */; };
 		3600212C2EC6EADB0016A41E /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		3600212E2EC6EADB0016A41E /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		360021302EC6EADB0016A41E /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		360021332EC6EAEB0016A41E /* (null) in Frameworks */ = {isa = PBXBuildFile; };
-		360021362EC6EC150016A41E /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = 360021352EC6EC150016A41E /* Highlightr */; };
 		360021392EC6EC2F0016A41E /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		3600213C2EC6EC450016A41E /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		3600213F2EC6EC710016A41E /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		360021422EC6EC7F0016A41E /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		360021442EC6EC7F0016A41E /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		564997D82E9B24CC00D89F78 /* Garnish in Frameworks */ = {isa = PBXBuildFile; productRef = 564997D72E9B24CC00D89F78 /* Garnish */; };
-		56C82BA92E9C2DB500DDD0D6 /* UniversalGlass in Frameworks */ = {isa = PBXBuildFile; productRef = 56C82BA82E9C2DB500DDD0D6 /* UniversalGlass */; };
 		7FAFC5DA2E3ADDCD009D7DC4 /* FaviconFinder in Frameworks */ = {isa = PBXBuildFile; productRef = 7FAFC5D92E3ADDCD009D7DC4 /* FaviconFinder */; };
-		7FE9E0EB2EE59D3500584E16 /* ColorfulX in Frameworks */ = {isa = PBXBuildFile; productRef = 7FE9E0EA2EE59D3500584E16 /* ColorfulX */; };
 		A1B2C3D62F0E6A0100ABCDEF /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D52F0E6A0100ABCDEF /* MLXLLM */; };
 		A7A6FB442F70F4B8007C79C8 /* ContentBlockerConverter in Frameworks */ = {isa = PBXBuildFile; productRef = B1F2E3D52F0F8B0100FACADE /* ContentBlockerConverter */; };
 /* End PBXBuildFile section */
@@ -37,7 +33,6 @@
 			membershipExceptions = (
 				Info.plist,
 				ThirdParty/BigUIPaging/README.md,
-				ThirdParty/HTSymbolHook/README.md,
 				ThirdParty/MuteableWKWebView/README.md,
 			);
 			target = 7F8340FB2E37F39400674A5D /* Nook */;
@@ -125,16 +120,12 @@
 				3600213C2EC6EC450016A41E /* (null) in Frameworks */,
 				3600213F2EC6EC710016A41E /* (null) in Frameworks */,
 				564997D82E9B24CC00D89F78 /* Garnish in Frameworks */,
-				56C82BA92E9C2DB500DDD0D6 /* UniversalGlass in Frameworks */,
 				7FAFC5DA2E3ADDCD009D7DC4 /* FaviconFinder in Frameworks */,
 				360021302EC6EADB0016A41E /* (null) in Frameworks */,
-				7FE9E0EB2EE59D3500584E16 /* ColorfulX in Frameworks */,
 				360021392EC6EC2F0016A41E /* (null) in Frameworks */,
 				2C16A0262E87430B0070894B /* Sparkle in Frameworks */,
-				360021362EC6EC150016A41E /* Highlightr in Frameworks */,
 				360021422EC6EC7F0016A41E /* (null) in Frameworks */,
 				3600212C2EC6EADB0016A41E /* (null) in Frameworks */,
-				2D0822D82EC8A61800C302AC /* UniversalGlass in Frameworks */,
 				3600212E2EC6EADB0016A41E /* (null) in Frameworks */,
 				360021332EC6EAEB0016A41E /* (null) in Frameworks */,
 				A1B2C3D62F0E6A0100ABCDEF /* MLXLLM in Frameworks */,
@@ -193,9 +184,6 @@
 				7FAFC5D92E3ADDCD009D7DC4 /* FaviconFinder */,
 				2C16A0252E87430B0070894B /* Sparkle */,
 				564997D72E9B24CC00D89F78 /* Garnish */,
-				360021352EC6EC150016A41E /* Highlightr */,
-				2D0822D72EC8A61800C302AC /* UniversalGlass */,
-				7FE9E0EA2EE59D3500584E16 /* ColorfulX */,
 				A1B2C3D52F0E6A0100ABCDEF /* MLXLLM */,
 				B1F2E3D52F0F8B0100FACADE /* ContentBlockerConverter */,
 			);
@@ -231,9 +219,6 @@
 				7FAFC5D82E3ADDCD009D7DC4 /* XCRemoteSwiftPackageReference "FaviconFinder" */,
 				2C16A0242E87430B0070894B /* XCRemoteSwiftPackageReference "Sparkle" */,
 				564997D62E9B24CC00D89F78 /* XCRemoteSwiftPackageReference "Garnish" */,
-				360021342EC6EC150016A41E /* XCRemoteSwiftPackageReference "Highlightr" */,
-				2D0822D62EC8A61800C302AC /* XCRemoteSwiftPackageReference "universalglass" */,
-				7FE9E0E92EE59D3500584E16 /* XCRemoteSwiftPackageReference "ColorfulX" */,
 				A1B2C3D42F0E6A0100ABCDEF /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				B1F2E3D42F0F8B0100FACADE /* XCRemoteSwiftPackageReference "SafariConverterLib" */,
 			);
@@ -513,33 +498,9 @@
 				minimumVersion = 2.8.0;
 			};
 		};
-		2D0822D62EC8A61800C302AC /* XCRemoteSwiftPackageReference "universalglass" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/aeastr/universalglass.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.0;
-			};
-		};
-		360021342EC6EC150016A41E /* XCRemoteSwiftPackageReference "Highlightr" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/raspu/Highlightr/";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.3.0;
-			};
-		};
 		564997D62E9B24CC00D89F78 /* XCRemoteSwiftPackageReference "Garnish" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/Aeastr/Garnish";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-		56C82BA72E9C2DB500DDD0D6 /* XCRemoteSwiftPackageReference "UniversalGlass" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/Aeastr/UniversalGlass";
 			requirement = {
 				branch = main;
 				kind = branch;
@@ -551,14 +512,6 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 5.1.4;
-			};
-		};
-		7FE9E0E92EE59D3500584E16 /* XCRemoteSwiftPackageReference "ColorfulX" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/Lakr233/ColorfulX.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 6.0.2;
 			};
 		};
 		A1B2C3D42F0E6A0100ABCDEF /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
@@ -585,35 +538,15 @@
 			package = 2C16A0242E87430B0070894B /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
 		};
-		2D0822D72EC8A61800C302AC /* UniversalGlass */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 2D0822D62EC8A61800C302AC /* XCRemoteSwiftPackageReference "universalglass" */;
-			productName = UniversalGlass;
-		};
-		360021352EC6EC150016A41E /* Highlightr */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 360021342EC6EC150016A41E /* XCRemoteSwiftPackageReference "Highlightr" */;
-			productName = Highlightr;
-		};
 		564997D72E9B24CC00D89F78 /* Garnish */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 564997D62E9B24CC00D89F78 /* XCRemoteSwiftPackageReference "Garnish" */;
 			productName = Garnish;
 		};
-		56C82BA82E9C2DB500DDD0D6 /* UniversalGlass */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 56C82BA72E9C2DB500DDD0D6 /* XCRemoteSwiftPackageReference "UniversalGlass" */;
-			productName = UniversalGlass;
-		};
 		7FAFC5D92E3ADDCD009D7DC4 /* FaviconFinder */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 7FAFC5D82E3ADDCD009D7DC4 /* XCRemoteSwiftPackageReference "FaviconFinder" */;
 			productName = FaviconFinder;
-		};
-		7FE9E0EA2EE59D3500584E16 /* ColorfulX */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 7FE9E0E92EE59D3500584E16 /* XCRemoteSwiftPackageReference "ColorfulX" */;
-			productName = ColorfulX;
 		};
 		A1B2C3D52F0E6A0100ABCDEF /* MLXLLM */ = {
 			isa = XCSwiftPackageProductDependency;

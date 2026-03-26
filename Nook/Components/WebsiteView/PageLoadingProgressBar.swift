@@ -6,6 +6,7 @@
 //  Observes WKWebView.estimatedProgress + isLoading via KVO.
 //
 
+import Combine
 import SwiftUI
 import WebKit
 
@@ -44,8 +45,8 @@ struct PageLoadingProgressBar: View {
         .onAppear {
             observer.attach(to: tab?.existingWebView)
         }
-        // Poll for webview availability since it may be created after us
-        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
+        // React to tab's objectWillChange (fires when webview is created) instead of polling
+        .onReceive(tab?.objectWillChange.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { _ in
             if observer.webView == nil, let wv = tab?.existingWebView {
                 observer.attach(to: wv)
             }
@@ -81,13 +82,15 @@ private class WebViewLoadingObserver: ObservableObject {
         isLoading = webView.isLoading
 
         progressObservation = webView.observe(\.estimatedProgress, options: [.new]) { [weak self] wv, _ in
-            Task { @MainActor [weak self] in
+            // KVO for WKWebView properties fires on the main thread
+            MainActor.assumeIsolated {
                 self?.progress = wv.estimatedProgress
             }
         }
 
         loadingObservation = webView.observe(\.isLoading, options: [.new]) { [weak self] wv, _ in
-            Task { @MainActor [weak self] in
+            // KVO for WKWebView properties fires on the main thread
+            MainActor.assumeIsolated {
                 guard let self else { return }
                 if wv.isLoading {
                     self.hideTask?.cancel()

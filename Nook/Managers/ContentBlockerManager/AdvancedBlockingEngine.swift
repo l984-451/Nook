@@ -215,6 +215,7 @@ final class AdvancedBlockingEngine {
         let scripts: [(resource: String, domains: [String])] = [
             ("facebook-sponsored-blocker", ["facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com"]),
             ("youtube-ad-blocker", ["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "tv.youtube.com", "youtubekids.com", "youtube-nocookie.com"]),
+            ("twitter-ad-blocker", ["twitter.com", "www.twitter.com", "mobile.twitter.com", "x.com", "www.x.com"]),
         ]
 
         for entry in scripts {

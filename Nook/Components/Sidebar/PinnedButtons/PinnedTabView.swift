@@ -41,12 +41,12 @@ struct PinnedTabView: View {
                                     .blur(radius: 30)
                                     .opacity(0.5)
                             }
-          
+
                         }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: pinnedTabsConfiguration.cornerRadius, style: .continuous))
 
-                
+
                 HStack {
                     Spacer()
                     VStack {
