@@ -3226,6 +3226,12 @@ extension Tab: WKUIDelegate {
             return nil  // Don't create a WebView, we're using Peek
         }
 
+        // Air Traffic Control — route popup URLs to designated spaces
+        if let url = navigationAction.request.url,
+           browserManager?.siteRoutingManager.applyRoute(url: url, from: self) == true {
+            return nil
+        }
+
         // For regular popups, create a new webView with the EXACT configuration that WebKit provided
         let newWebView = FocusableWKWebView(frame: .zero, configuration: configuration)
 
