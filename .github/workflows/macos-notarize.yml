@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-sign-notarize:
-    runs-on: macos-26
+    runs-on: macos-15
     permissions:
       contents: write
 
