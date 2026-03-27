@@ -90,13 +90,13 @@ class SearchManager {
             ? SearchSuggestion(text: query, type: .url)
             : nil
 
-        // Show immediate suggestions: tabs + URL + history
+        // Show immediate suggestions: URL + history + tabs
         var immediateSuggestions: [SearchSuggestion] = []
-        immediateSuggestions.append(contentsOf: limitedTabSuggestions)
         if let urlSug = urlSuggestion {
             immediateSuggestions.append(urlSug)
         }
         immediateSuggestions.append(contentsOf: limitedHistorySuggestions)
+        immediateSuggestions.append(contentsOf: limitedTabSuggestions)
 
         if !immediateSuggestions.isEmpty {
             updateSuggestionsIfNeeded(immediateSuggestions)
@@ -240,14 +240,14 @@ class SearchManager {
                         )
                     }
 
-                    // Priority order: tabs -> URL -> search -> history
+                    // Priority order: URL -> search -> history -> tabs
                     var combined: [SearchSuggestion] = []
-                    combined.append(contentsOf: tabSuggestions)
                     if let urlSug = urlSuggestion {
                         combined.append(urlSug)
                     }
                     combined.append(contentsOf: webSuggestions)
                     combined.append(contentsOf: historySuggestions)
+                    combined.append(contentsOf: tabSuggestions)
                     self?.updateSuggestionsIfNeeded(Array(combined.prefix(5)))
 
                 } catch {

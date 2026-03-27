@@ -42,6 +42,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var mouseEventMonitor: Any?
     private var wakeObserver: Any?
     private let userDefaults = UserDefaults.standard
+    private var pendingURLs: [URL] = []
     
 
 
@@ -298,8 +299,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     }
 
     /// Routes incoming external URLs to the browser manager
+    ///
+    /// If the browser manager isn't ready yet (cold launch via URL click),
+    /// queues the URL and drains it once `browserManager` is set.
     private func handleIncoming(url: URL) {
         guard let manager = browserManager else {
+            AppDelegate.log.info("Queuing URL for deferred open: \(url.absoluteString, privacy: .public)")
+            pendingURLs.append(url)
             return
         }
         Task { @MainActor in
@@ -309,6 +315,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             }
             manager.presentExternalURL(url)
         }
+    }
+
+    /// Opens any URLs that arrived before browserManager was available
+    func drainPendingURLs() {
+        guard !pendingURLs.isEmpty else { return }
+        let urls = pendingURLs
+        pendingURLs.removeAll()
+        urls.forEach { handleIncoming(url: $0) }
     }
 }
 

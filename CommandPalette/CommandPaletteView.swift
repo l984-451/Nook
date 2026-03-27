@@ -141,6 +141,19 @@ struct CommandPaletteView: View {
                                             text = ""
                                             return .handled
                                         }
+                                        // Tab accepts the top suggestion when nothing is selected
+                                        if selectedSuggestionIndex < 0 && !visibleSuggestions.isEmpty {
+                                            selectedSuggestionIndex = 0
+                                            isNavigatingSuggestion = true
+                                            text = displayTextForSuggestion(visibleSuggestions[0])
+                                            return .handled
+                                        }
+                                        // Tab with a selected suggestion = accept it (same as Enter)
+                                        if selectedSuggestionIndex >= 0 && selectedSuggestionIndex < visibleSuggestions.count {
+                                            let suggestion = visibleSuggestions[selectedSuggestionIndex]
+                                            selectSuggestion(suggestion)
+                                            return .handled
+                                        }
                                         return .ignored
                                     }
                                     .onKeyPress(.return) {
@@ -192,7 +205,7 @@ struct CommandPaletteView: View {
                                         searchManager.searchSuggestions(
                                             for: newValue
                                         )
-                                        selectedSuggestionIndex = visibleSuggestions.isEmpty ? -1 : 0
+                                        selectedSuggestionIndex = -1
                                     }
 
                                     if activeSiteSearch == nil, let match = siteSearchMatch {
@@ -312,8 +325,8 @@ struct CommandPaletteView: View {
             let count = visibleSuggestions.count
             if count == 0 {
                 selectedSuggestionIndex = -1
-            } else if selectedSuggestionIndex < 0 || selectedSuggestionIndex >= count {
-                selectedSuggestionIndex = 0
+            } else if selectedSuggestionIndex >= count {
+                selectedSuggestionIndex = count - 1
             }
         }
         .animation(.easeInOut(duration: 0.15), value: selectedSuggestionIndex)

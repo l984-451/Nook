@@ -18,6 +18,7 @@ struct SpacesSideBarView: View {
     @Environment(WindowRegistry.self) private var windowRegistry
     @Environment(\.nookSettings) var nookSettings
     @Environment(CommandPalette.self) var commandPalette
+    @Environment(TabOrganizerManager.self) var tabOrganizerManager
 
     // Space navigation
     @State private var activeSpaceIndex: Int = 0
@@ -58,27 +59,11 @@ struct SpacesSideBarView: View {
     @ObservedObject private var dragSession = NookDragSessionManager.shared
 
     private var mainSidebarContent: some View {
-        let effectiveProfileId = windowState.currentProfileId ?? browserManager.currentProfile?.id
-        let essentialsCount = effectiveProfileId.map { tabManager.essentialTabs(for: $0).count } ?? 0
-        let shouldAnimate = (windowRegistry.activeWindow?.id == windowState.id) && !browserManager.isTransitioningProfile
-
         return VStack(spacing: 8) {
             // Header (window controls, nav buttons, URL bar)
             SidebarHeader(isSidebarHovered: isSidebarHovered)
                 .environmentObject(browserManager)
                 .environment(windowState)
-
-            // Pinned tabs grid (hidden in incognito)
-            if !windowState.isIncognito {
-                PinnedGrid(
-                    width: windowState.sidebarContentWidth,
-                    profileId: effectiveProfileId
-                )
-                .environmentObject(browserManager)
-                .environment(windowState)
-                .padding(.horizontal, 8)
-                .modifier(FallbackDropBelowEssentialsModifier())
-            }
 
             // Spaces page view with draggable spacer
             ZStack {
@@ -134,10 +119,6 @@ struct SpacesSideBarView: View {
                         updateSidebarScreenFrame(geo)
                     }
             }
-        )
-        .animation(
-            shouldAnimate ? .easeInOut(duration: 0.18) : nil,
-            value: essentialsCount
         )
     }
 
@@ -327,6 +308,21 @@ struct SpacesSideBarView: View {
     @ViewBuilder
     private func makeSpaceView(for space: Space, index: Int) -> some View {
         VStack(spacing: 0) {
+            if !windowState.isIncognito {
+                PinnedGrid(
+                    width: windowState.sidebarContentWidth,
+                    profileId: space.profileId ?? browserManager.currentProfile?.id
+                )
+                .environmentObject(browserManager)
+                .environmentObject(tabManager)
+                .environment(windowState)
+                .environment(windowRegistry)
+                .environment(nookSettings)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+                .modifier(FallbackDropBelowEssentialsModifier())
+            }
+
             SpaceView(
                 space: space,
                 isActive: windowState.currentSpaceId == space.id,
@@ -339,8 +335,12 @@ struct SpacesSideBarView: View {
                 onMuteTab: { $0.toggleMute() }
             )
             .environmentObject(browserManager)
+            .environmentObject(tabManager)
             .environment(windowState)
+            .environment(windowRegistry)
             .environment(commandPalette)
+            .environment(tabOrganizerManager)
+            .environment(nookSettings)
             .environmentObject(browserManager.gradientColorManager)
             .environmentObject(browserManager.splitManager)
             .id(space.id.uuidString + "-w\(Int(windowState.sidebarContentWidth))")

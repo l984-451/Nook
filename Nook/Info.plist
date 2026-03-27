@@ -14,6 +14,8 @@
 				<string>http</string>
 				<string>https</string>
 			</array>
+			<key>LSHandlerRank</key>
+			<string>Default</string>
 		</dict>
 	</array>
 	<key>CFBundleDocumentTypes</key>

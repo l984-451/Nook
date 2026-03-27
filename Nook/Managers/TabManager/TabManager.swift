@@ -1132,6 +1132,11 @@ class TabManager: ObservableObject {
     private func deactivatePinnedTab(_ tab: Tab) {
         browserManager?.splitManager.handleTabClosure(tab.id)
 
+        // Reset URL to the pinned home URL so next open starts fresh
+        if let pinnedURL = tab.pinnedURL {
+            tab.url = pinnedURL
+        }
+
         // Unload webview directly (bypasses TabManager.unloadTab which guards essentials)
         browserManager?.compositorManager.unloadTab(tab)
         browserManager?.webViewCoordinator?.removeAllWebViews(for: tab)

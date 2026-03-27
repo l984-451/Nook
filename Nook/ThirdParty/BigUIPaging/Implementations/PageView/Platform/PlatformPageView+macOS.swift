@@ -76,6 +76,7 @@ extension PlatformPageView {
         private var hasTriggered = false
         private var isAnimating = false
         private let swipeThreshold: CGFloat = 25
+        private let scrollMultiplier: CGFloat = 2.5
 
         init(_ parent: PlatformPageView) {
             self.parent = parent
@@ -112,7 +113,7 @@ extension PlatformPageView {
 
                 if gestureAxis == .horizontal {
                     if !hasTriggered {
-                        scrollAccumulator += event.scrollingDeltaX
+                        scrollAccumulator += event.scrollingDeltaX * scrollMultiplier
                         if scrollAccumulator > swipeThreshold {
                             navigateByDirection(-1) // swipe right = previous
                             hasTriggered = true
@@ -158,6 +159,9 @@ extension PlatformPageView {
                     self?.parent.selection = value
                 }
                 self?.isAnimating = false
+                // Allow continued gesture or momentum to trigger another page switch
+                self?.hasTriggered = false
+                self?.scrollAccumulator = 0
             }
         }
 
