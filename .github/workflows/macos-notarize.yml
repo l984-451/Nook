@@ -54,7 +54,7 @@ jobs:
           echo "Using signing identity: $IDENTITY"
 
       - name: Ensure Metal Toolchain
-        run: xcodebuild -downloadComponent MetalToolchain
+        run: xcodebuild -downloadComponent MetalToolchain || echo "Metal Toolchain download not supported on this Xcode version, skipping"
 
       - name: Build app
         env:
