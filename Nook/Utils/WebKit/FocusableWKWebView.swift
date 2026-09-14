@@ -255,6 +255,7 @@ final class FocusableWKWebView: WKWebView {
             download,
             originalURL: originalURL,
             suggestedFilename: proposedName,
+            dataStore: self.configuration.websiteDataStore,
             destinationPreference: destinationPreference,
             allowedContentTypes: Self.imageContentTypes
         )

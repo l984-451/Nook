@@ -7,18 +7,20 @@
 
 import AppKit
 import Foundation
+import OSLog
 import QuickLook
 import QuickLookThumbnailing
 import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
 
+private let logger = Logger(subsystem: "com.baingurley.nook", category: "DownloadManager")
+
 // MARK: - Download Model
 
 @Observable
 public class Download: Identifiable {
     public let id: UUID
-    let download: WKDownload
     let originalURL: URL
     let suggestedFilename: String
     let destinationPreference: DestinationPreference
@@ -42,6 +44,9 @@ public class Download: Identifiable {
     var startDate: Date
     var estimatedTimeRemaining: TimeInterval?
     var downloadThumbnail: NSImage?
+
+    /// Called to cancel the underlying download (WKDownload or URLSessionTask).
+    var cancelHandler: (() -> Void)?
 
     enum DownloadState {
         case pending
@@ -87,14 +92,12 @@ public class Download: Identifiable {
     }
 
     init(
-        download: WKDownload,
         originalURL: URL,
         suggestedFilename: String,
         destinationPreference: DestinationPreference = .automaticDownloadsFolder,
         allowedContentTypes: [UTType]? = nil
     ) {
         id = UUID()
-        self.download = download
         self.originalURL = originalURL
         self.suggestedFilename = suggestedFilename
         self.destinationPreference = destinationPreference
@@ -117,21 +120,11 @@ public class Download: Identifiable {
             return
         }
 
-        #if DEBUG
-        print("Loading thumbnail for: \(destinationURL.lastPathComponent)")
-        #endif
-
         if shouldGenerateThumbnail(for: destinationURL) {
             if let thumbnail = await getQuickLookThumbnail(for: destinationURL, size: size) {
                 downloadThumbnail = thumbnail
-                #if DEBUG
-                print("QuickLook thumbnail loaded for: \(destinationURL.lastPathComponent)")
-                #endif
                 return
             }
-            #if DEBUG
-            print("QuickLook thumbnail failed, falling back to Finder icon for: \(destinationURL.lastPathComponent)")
-            #endif
         }
 
         let finderIcon = NSWorkspace.shared.icon(forFile: destinationURL.path)
@@ -147,9 +140,6 @@ public class Download: Identifiable {
         highResIcon.unlockFocus()
 
         downloadThumbnail = highResIcon
-        #if DEBUG
-        print("Finder icon loaded for: \(destinationURL.lastPathComponent)")
-        #endif
     }
 
     private func shouldGenerateThumbnail(for fileURL: URL) -> Bool {
@@ -240,7 +230,12 @@ public class DownloadManager: NSObject {
     public static let shared = DownloadManager()
 
     private var downloads: [UUID: Download] = [:]
-    private var downloadDelegates: [UUID: DownloadDelegate] = [:]
+
+    /// Retains WKDownload delegates (for blob:/data: URL fallback downloads).
+    private var wkDownloadDelegates: [UUID: WKDownloadDelegateHandler] = [:]
+
+    /// Retains URLSession coordinators (for http/https disk-streaming downloads).
+    private var urlSessionCoordinators: [UUID: URLSessionDownloadCoordinator] = [:]
 
     var activeDownloads: [Download] {
         return Array(downloads.values).filter { $0.state == .downloading || $0.state == .pending }
@@ -272,52 +267,136 @@ public class DownloadManager: NSObject {
 
     // MARK: - Download Management
 
+    /// Add a download. For http/https URLs, cancels the WKDownload and uses
+    /// URLSessionDownloadTask instead, which streams directly to disk with
+    /// constant memory usage. For blob:/data: URLs, falls back to WKDownload.
+    ///
+    /// - Parameter dataStore: The WKWebsiteDataStore from the originating webview,
+    ///   used to copy cookies for authenticated URLSession downloads.
     func addDownload(
-        _ download: WKDownload,
+        _ wkDownload: WKDownload,
         originalURL: URL,
         suggestedFilename: String,
+        dataStore: WKWebsiteDataStore? = nil,
         destinationPreference: Download.DestinationPreference = .automaticDownloadsFolder,
         allowedContentTypes: [UTType]? = nil
     ) -> Download {
+        let scheme = originalURL.scheme?.lowercased() ?? ""
+        let canUseURLSession = (scheme == "http" || scheme == "https")
+
+        if canUseURLSession {
+            // Cancel WKDownload — we'll re-request via URLSession which streams to disk
+            wkDownload.cancel()
+            return addURLSessionDownload(
+                url: originalURL,
+                suggestedFilename: suggestedFilename,
+                dataStore: dataStore,
+                destinationPreference: destinationPreference,
+                allowedContentTypes: allowedContentTypes
+            )
+        } else {
+            // Fallback: use WKDownload for blob:/data: URLs
+            return addWKDownload(
+                wkDownload,
+                originalURL: originalURL,
+                suggestedFilename: suggestedFilename,
+                destinationPreference: destinationPreference,
+                allowedContentTypes: allowedContentTypes
+            )
+        }
+    }
+
+    // MARK: - URLSession Downloads (http/https)
+
+    private func addURLSessionDownload(
+        url: URL,
+        suggestedFilename: String,
+        dataStore: WKWebsiteDataStore?,
+        destinationPreference: Download.DestinationPreference,
+        allowedContentTypes: [UTType]?
+    ) -> Download {
         let downloadModel = Download(
-            download: download,
+            originalURL: url,
+            suggestedFilename: suggestedFilename,
+            destinationPreference: destinationPreference,
+            allowedContentTypes: allowedContentTypes
+        )
+
+        let coordinator = URLSessionDownloadCoordinator(
+            downloadManager: self,
+            download: downloadModel
+        )
+
+        downloads[downloadModel.id] = downloadModel
+        urlSessionCoordinators[downloadModel.id] = coordinator
+
+        downloadModel.cancelHandler = { [weak coordinator] in
+            coordinator?.cancel()
+        }
+
+        logger.info("Starting URLSession download for \(suggestedFilename, privacy: .public)")
+
+        // Fetch cookies from the webview's data store, then start download
+        Task { @MainActor in
+            var cookies: [HTTPCookie] = []
+            if let dataStore = dataStore {
+                cookies = await dataStore.httpCookieStore.allCookies()
+            }
+            coordinator.start(url: url, cookies: cookies)
+        }
+
+        return downloadModel
+    }
+
+    // MARK: - WKDownload Fallback (blob:/data: URLs)
+
+    private func addWKDownload(
+        _ wkDownload: WKDownload,
+        originalURL: URL,
+        suggestedFilename: String,
+        destinationPreference: Download.DestinationPreference,
+        allowedContentTypes: [UTType]?
+    ) -> Download {
+        let downloadModel = Download(
             originalURL: originalURL,
             suggestedFilename: suggestedFilename,
             destinationPreference: destinationPreference,
             allowedContentTypes: allowedContentTypes
         )
-        let delegate = DownloadDelegate(downloadManager: self, download: downloadModel)
+        let delegate = WKDownloadDelegateHandler(downloadManager: self, download: downloadModel)
 
         downloads[downloadModel.id] = downloadModel
-        downloadDelegates[downloadModel.id] = delegate
-        download.delegate = delegate
+        wkDownloadDelegates[downloadModel.id] = delegate
+        wkDownload.delegate = delegate
 
-        #if DEBUG
-        print("Added download: \(suggestedFilename) with ID: \(downloadModel.id)")
-        print("Download delegate set: \(download.delegate != nil)")
-        #endif
+        downloadModel.cancelHandler = { [weak wkDownload] in
+            wkDownload?.cancel()
+        }
+
+        logger.info("Using WKDownload fallback for \(originalURL.scheme ?? "unknown", privacy: .public) URL: \(suggestedFilename, privacy: .public)")
         return downloadModel
     }
 
+    // MARK: - Lifecycle
+
     func removeDownload(_ id: UUID) {
         downloads.removeValue(forKey: id)
-        downloadDelegates.removeValue(forKey: id)
+        wkDownloadDelegates.removeValue(forKey: id)
+        if let coordinator = urlSessionCoordinators.removeValue(forKey: id) {
+            coordinator.invalidate()
+        }
     }
 
     func cancelDownload(_ id: UUID) {
         guard let download = downloads[id] else { return }
+        download.cancelHandler?()
         download.state = .cancelled
-        download.download.cancel()
-        #if DEBUG
-        print("Cancelled download: \(download.suggestedFilename)")
-        #endif
+        logger.info("Cancelled download: \(download.suggestedFilename, privacy: .public)")
     }
 
     func retryDownload(_ id: UUID) {
         guard let download = downloads[id], download.state == .failed else { return }
-        #if DEBUG
-        print("Retry not supported for WKDownload")
-        #endif
+        logger.debug("Retry not yet supported")
     }
 
     func clearCompletedDownloads() {
@@ -335,23 +414,18 @@ public class DownloadManager: NSObject {
     }
 
     func clearAllDownloads() {
+        for (_, coordinator) in urlSessionCoordinators {
+            coordinator.invalidate()
+        }
         downloads.removeAll()
-        downloadDelegates.removeAll()
+        wkDownloadDelegates.removeAll()
+        urlSessionCoordinators.removeAll()
     }
 
     // MARK: - Download Updates
 
     func updateDownloadProgress(_ id: UUID, progress: Double, downloadedBytes: Int64, fileSize: Int64?) {
-        guard let download = downloads[id] else {
-            #if DEBUG
-            print("Download not found for ID: \(id)")
-            #endif
-            return
-        }
-
-        #if DEBUG
-        print("Updating download progress: \(progress * 100)% for \(download.suggestedFilename)")
-        #endif
+        guard let download = downloads[id] else { return }
 
         download.progress = progress
         download.downloadedBytes = downloadedBytes
@@ -367,27 +441,14 @@ public class DownloadManager: NSObject {
     }
 
     func updateDownloadState(_ id: UUID, state: Download.DownloadState, error: Error? = nil) {
-        guard let download = downloads[id] else {
-            #if DEBUG
-            print("Download not found for ID: \(id)")
-            #endif
-            return
-        }
-
-        #if DEBUG
-        print("Updating download state to \(state.description) for \(download.suggestedFilename)")
-        #endif
+        guard let download = downloads[id] else { return }
 
         download.state = state
         download.error = error
 
-        #if DEBUG
-        if state == .completed {
-            print("Download completed: \(download.suggestedFilename)")
-        } else if state == .failed {
-            print("Download failed: \(download.suggestedFilename) - \(error?.localizedDescription ?? "Unknown error")")
+        if state == .failed, let error = error {
+            logger.error("Download failed: \(download.suggestedFilename, privacy: .public) - \(error.localizedDescription, privacy: .public)")
         }
-        #endif
     }
 
     func setDownloadDestination(_ id: UUID, destination: URL) {
@@ -396,9 +457,217 @@ public class DownloadManager: NSObject {
     }
 }
 
-// MARK: - Download Delegate
+// MARK: - URLSession Download Coordinator
 
-private class DownloadDelegate: NSObject, WKDownloadDelegate {
+/// Handles large file downloads via URLSessionDownloadTask, which streams
+/// response data directly to a temporary file on disk — using constant memory
+/// regardless of file size.
+private class URLSessionDownloadCoordinator: NSObject, URLSessionDownloadDelegate {
+    weak var downloadManager: DownloadManager?
+    let download: Download
+    private var session: URLSession?
+    private var task: URLSessionDownloadTask?
+
+    init(downloadManager: DownloadManager, download: Download) {
+        self.downloadManager = downloadManager
+        self.download = download
+        super.init()
+    }
+
+    func start(url: URL, cookies: [HTTPCookie]) {
+        let config = URLSessionConfiguration.default
+        // Disable URL cache — we're writing to a file
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // Copy cookies from the webview for authenticated downloads
+        let storage = HTTPCookieStorage()
+        for cookie in cookies {
+            storage.setCookie(cookie)
+        }
+        config.httpCookieStorage = storage
+
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        self.session = session
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let task = session.downloadTask(with: request)
+        self.task = task
+        task.resume()
+    }
+
+    func cancel() {
+        task?.cancel()
+        session?.invalidateAndCancel()
+    }
+
+    func invalidate() {
+        session?.invalidateAndCancel()
+    }
+
+    // MARK: - URLSessionDownloadDelegate
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        // Resolve destination on main actor, then move file
+        let suggestedFilename = download.suggestedFilename
+        let destinationPreference = download.destinationPreference
+        let allowedContentTypes = download.allowedContentTypes
+        let downloadId = download.id
+
+        // Determine destination synchronously using the same logic as WKDownload path
+        let destination: URL
+        switch destinationPreference {
+        case .automaticDownloadsFolder:
+            destination = Self.resolveAutomaticDestination(filename: suggestedFilename)
+        case .askUser:
+            // For save panel, we need main thread — use automatic as fallback
+            // (save panel flow is handled before download starts in the WKDownload path,
+            // but URLSession doesn't have that hook, so we default to Downloads folder)
+            destination = Self.resolveAutomaticDestination(filename: suggestedFilename)
+        }
+
+        do {
+            // Ensure destination directory exists
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            // If destination already exists (race condition), remove it
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.moveItem(at: location, to: destination)
+            Self.setQuarantineAttribute(on: destination)
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.downloadManager?.setDownloadDestination(downloadId, destination: destination)
+                self.downloadManager?.updateDownloadState(downloadId, state: .completed)
+            }
+        } catch {
+            logger.error("Failed to move download to destination: \(error.localizedDescription, privacy: .public)")
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.downloadManager?.updateDownloadState(downloadId, state: .failed, error: error)
+            }
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        let fileSize: Int64? = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil
+        let progress = fileSize.map { Double(totalBytesWritten) / Double($0) } ?? 0.0
+        let clampedProgress = min(progress, 1.0)
+        let downloadId = download.id
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.downloadManager?.updateDownloadProgress(
+                downloadId,
+                progress: clampedProgress,
+                downloadedBytes: totalBytesWritten,
+                fileSize: fileSize
+            )
+            // Transition from pending to downloading on first data
+            if self.download.state == .pending {
+                self.downloadManager?.updateDownloadState(downloadId, state: .downloading)
+            }
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: (any Error)?
+    ) {
+        guard let error = error else { return }
+        // Don't report cancellation as failure
+        if (error as NSError).code == NSURLErrorCancelled { return }
+
+        let downloadId = download.id
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.downloadManager?.updateDownloadState(downloadId, state: .failed, error: error)
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        // Follow redirects
+        completionHandler(request)
+    }
+
+    // MARK: - Destination Resolution
+
+    private static func resolveAutomaticDestination(filename: String) -> URL {
+        let cleanName = sanitizeFilename(filename)
+
+        guard let downloadsDirectory = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            return FileManager.default.temporaryDirectory.appendingPathComponent(cleanName)
+        }
+
+        var destination = downloadsDirectory.appendingPathComponent(cleanName)
+        let ext = destination.pathExtension
+        let base = destination.deletingPathExtension().lastPathComponent
+        var counter = 1
+        while FileManager.default.fileExists(atPath: destination.path) {
+            let newName = "\(base) (\(counter))" + (ext.isEmpty ? "" : ".\(ext)")
+            destination = downloadsDirectory.appendingPathComponent(newName)
+            counter += 1
+        }
+
+        return destination
+    }
+
+    static func sanitizeFilename(_ filename: String) -> String {
+        let defaultName = filename.isEmpty ? "download" : filename
+        var cleanName = defaultName
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "\0", with: "")
+        while cleanName.hasPrefix(".") {
+            cleanName = String(cleanName.dropFirst())
+        }
+        if cleanName.isEmpty { cleanName = "download" }
+        if cleanName.count > 255 {
+            let ext = (cleanName as NSString).pathExtension
+            let base = (cleanName as NSString).deletingPathExtension
+            let maxBase = 255 - (ext.isEmpty ? 0 : ext.count + 1)
+            cleanName = String(base.prefix(maxBase)) + (ext.isEmpty ? "" : ".\(ext)")
+        }
+        cleanName = (cleanName as NSString).lastPathComponent
+        return cleanName
+    }
+
+    /// Sets the `com.apple.quarantine` extended attribute on a downloaded file.
+    static func setQuarantineAttribute(on fileURL: URL) {
+        let quarantineValue = "0083;\(String(format: "%08x", Int(Date().timeIntervalSince1970)));Nook;\(UUID().uuidString)"
+        guard let data = quarantineValue.data(using: .utf8) else { return }
+
+        fileURL.withUnsafeFileSystemRepresentation { path in
+            guard let path = path else { return }
+            _ = setxattr(path, "com.apple.quarantine", (data as NSData).bytes, data.count, 0, 0)
+        }
+    }
+}
+
+// MARK: - WKDownload Delegate Handler (fallback for blob:/data: URLs)
+
+private class WKDownloadDelegateHandler: NSObject, WKDownloadDelegate {
     weak var downloadManager: DownloadManager?
     let download: Download
 
@@ -416,51 +685,34 @@ private class DownloadDelegate: NSObject, WKDownloadDelegate {
     // iOS-style API (older) – keep for compatibility where this signature exists
     public func download(_: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
         decideDestination(response: response, suggestedFilename: suggestedFilename) { [weak self] decision in
-            guard let self else { return }
+            guard self != nil else { return }
             switch decision {
             case .proceed(let url):
                 completionHandler(url)
             case .cancel:
-                self.download.download.cancel()
                 completionHandler(nil)
             }
         }
     }
 
     // macOS 12+/15+ API – WebKit on macOS expects the (URL, Bool) completion to grant a sandbox extension
-    public func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL, Bool) -> Void) {
+    public func download(_ wkDownload: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL, Bool) -> Void) {
         decideDestination(response: response, suggestedFilename: suggestedFilename) { [weak self] decision in
-            guard let self else { return }
+            guard self != nil else { return }
             switch decision {
             case .proceed(let url):
-                // Return true to grant sandbox extension - this allows WebKit to write to the destination
                 completionHandler(url, true)
             case .cancel:
-                self.download.download.cancel()
+                wkDownload.cancel()
                 completionHandler(URL(fileURLWithPath: "/tmp/cancelled"), false)
             }
         }
     }
 
     private func decideDestination(response: URLResponse, suggestedFilename: String, completion: @escaping (DestinationDecision) -> Void) {
-        let defaultName = suggestedFilename.isEmpty ? "download" : suggestedFilename
-        var cleanName = defaultName
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "\0", with: "")       // Strip null bytes
-        // Strip leading dots to prevent creating hidden files
-        while cleanName.hasPrefix(".") {
-            cleanName = String(cleanName.dropFirst())
-        }
-        if cleanName.isEmpty { cleanName = "download" }
-        // Limit filename length to 255 characters (filesystem maximum)
-        if cleanName.count > 255 {
-            let ext = (cleanName as NSString).pathExtension
-            let base = (cleanName as NSString).deletingPathExtension
-            let maxBase = 255 - (ext.isEmpty ? 0 : ext.count + 1)
-            cleanName = String(base.prefix(maxBase)) + (ext.isEmpty ? "" : ".\(ext)")
-        }
-        // Safety: use lastPathComponent to ensure no directory traversal
-        cleanName = (cleanName as NSString).lastPathComponent
+        let cleanName = URLSessionDownloadCoordinator.sanitizeFilename(
+            suggestedFilename.isEmpty ? "download" : suggestedFilename
+        )
 
         switch download.destinationPreference {
         case .automaticDownloadsFolder:
@@ -506,9 +758,6 @@ private class DownloadDelegate: NSObject, WKDownloadDelegate {
                     self.configureDownload(for: url, response: response)
                     completion(.proceed(url))
                 } else {
-                    #if DEBUG
-                    print("Download cancelled by user")
-                    #endif
                     self.downloadManager?.updateDownloadState(self.download.id, state: .cancelled)
                     completion(.cancel)
                 }
@@ -518,174 +767,34 @@ private class DownloadDelegate: NSObject, WKDownloadDelegate {
 
     private func configureDownload(for destination: URL, response: URLResponse) {
         let fileSize = response.expectedContentLength
-        #if DEBUG
-        print("Download destination set: \(destination.path) with fileSize: \(fileSize) bytes")
-        #endif
         downloadManager?.updateDownloadProgress(download.id, progress: 0.0, downloadedBytes: 0, fileSize: fileSize)
         downloadManager?.updateDownloadState(download.id, state: .downloading)
         downloadManager?.setDownloadDestination(download.id, destination: destination)
-
-        startFileSizeMonitoring()
-    }
-
-    private func startProgressSimulation() {
-        DispatchQueue.global(qos: .background).async {
-            var progress = 0.0
-            let totalSteps = 20
-            let stepDuration = 0.5
-
-            for step in 1 ... totalSteps {
-                progress = Double(step) / Double(totalSteps)
-
-                DispatchQueue.main.async {
-                    self.downloadManager?.updateDownloadProgress(
-                        self.download.id,
-                        progress: progress,
-                        downloadedBytes: Int64(Double(self.download.fileSize ?? 0) * progress),
-                        fileSize: self.download.fileSize
-                    )
-                }
-
-                Thread.sleep(forTimeInterval: stepDuration)
-            }
-        }
-    }
-
-    private func startFileSizeMonitoring() {
-        guard let destinationURL = download.destinationURL else { return }
-
-        DispatchQueue.global(qos: .background).async {
-            var lastSize: Int64 = 0
-
-            while true {
-                do {
-                    let attributes = try FileManager.default.attributesOfItem(atPath: destinationURL.path)
-                    if let fileSize = attributes[.size] as? Int64 {
-                        if fileSize > lastSize {
-                            lastSize = fileSize
-
-                            let expectedSize = self.download.fileSize ?? 0
-                            let progress = expectedSize > 0 ? Double(fileSize) / Double(expectedSize) : 0.0
-                            let clampedProgress = min(progress, 1.0)
-
-                            DispatchQueue.main.async {
-                                self.downloadManager?.updateDownloadProgress(
-                                    self.download.id,
-                                    progress: clampedProgress,
-                                    downloadedBytes: fileSize,
-                                    fileSize: expectedSize
-                                )
-                            }
-
-                            #if DEBUG
-                            print("File size monitoring: \(clampedProgress * 100)% (\(fileSize) / \(expectedSize))")
-                            #endif
-                        }
-                    }
-                } catch {
-                    #if DEBUG
-                    print("Error monitoring file size: \(error)")
-                    #endif
-                }
-
-                Thread.sleep(forTimeInterval: 0.5)
-
-                if self.download.state == .completed || self.download.state == .failed {
-                    break
-                }
-            }
-        }
-    }
-
-    func download(_: WKDownload, didReceive response: URLResponse) {
-        let fileSize = response.expectedContentLength
-        #if DEBUG
-        print("Download started with file size: \(fileSize) bytes")
-        #endif
-        downloadManager?.updateDownloadProgress(download.id, progress: 0.0, downloadedBytes: 0, fileSize: fileSize)
-        downloadManager?.updateDownloadState(download.id, state: .downloading)
     }
 
     func download(_: WKDownload, didReceive bytes: UInt64) {
         let downloadedBytes = Int64(bytes)
         let progress = download.fileSize.map { Double(downloadedBytes) / Double($0) } ?? 0.0
-
         let clampedProgress = min(progress, 1.0)
-
         downloadManager?.updateDownloadProgress(download.id, progress: clampedProgress, downloadedBytes: downloadedBytes, fileSize: download.fileSize)
-
-        #if DEBUG
-        print("Download progress: \(clampedProgress * 100)% (\(downloadedBytes) / \(download.fileSize ?? 0))")
-        #endif
     }
 
     func downloadDidFinish(_: WKDownload) {
-        #if DEBUG
-        print("Download finished: \(download.suggestedFilename)")
-        #endif
-
-        // Set quarantine attribute so Gatekeeper warns about downloaded executables
         if let destinationURL = download.destinationURL {
-            DownloadDelegate.setQuarantineAttribute(on: destinationURL)
+            URLSessionDownloadCoordinator.setQuarantineAttribute(on: destinationURL)
         }
-
         downloadManager?.updateDownloadState(download.id, state: .completed)
     }
 
-    /// Sets the `com.apple.quarantine` extended attribute on a downloaded file.
-    ///
-    /// This ensures macOS Gatekeeper will prompt the user before opening
-    /// executables, disk images, or other potentially dangerous files
-    /// downloaded from the web.
-    private static func setQuarantineAttribute(on fileURL: URL) {
-        // com.apple.quarantine format: flags;timestamp_hex;agent_name;uuid
-        // 0083 = "downloaded from the web, not yet opened by the user"
-        let quarantineValue = "0083;\(String(format: "%08x", Int(Date().timeIntervalSince1970)));Nook;\(UUID().uuidString)"
-        guard let data = quarantineValue.data(using: .utf8) else { return }
-
-        fileURL.withUnsafeFileSystemRepresentation { path in
-            guard let path = path else { return }
-            let result = setxattr(path, "com.apple.quarantine", (data as NSData).bytes, data.count, 0, 0)
-            if result != 0 {
-                #if DEBUG
-                print("Failed to set quarantine attribute on \(fileURL.lastPathComponent): errno \(errno)")
-                #endif
-            }
-        }
-    }
-
     func download(_: WKDownload, didFailWithError error: Error, resumeData _: Data?) {
-        #if DEBUG
-        print("Download failed: \(download.suggestedFilename) - \(error.localizedDescription)")
-        #endif
         downloadManager?.updateDownloadState(download.id, state: .failed, error: error)
     }
 
     func downloadWillPerformHTTPRedirection(_: WKDownload, navigationResponse _: HTTPURLResponse, newRequest request: URLRequest, decisionHandler: @escaping (URLRequest?) -> Void) {
-        #if DEBUG
-        print("Download will perform HTTP redirection")
-        #endif
         decisionHandler(request)
     }
 
     func download(_: WKDownload, didReceive _: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        #if DEBUG
-        print("Download received authentication challenge")
-        #endif
         completionHandler(.performDefaultHandling, nil)
-    }
-
-    public func download(_: WKDownload, didFinishDownloadingTo location: URL) {
-        #if DEBUG
-        print("🔽 [DownloadManager] Download finished to: \(location.path)")
-        #endif
-        // The download is already handled by downloadDidFinish, but we can add additional logic here if needed
-    }
-
-    public func download(_: WKDownload, didFailWithError error: Error) {
-        #if DEBUG
-        print("🔽 [DownloadManager] Download failed: \(error.localizedDescription)")
-        #endif
-        // The download is already handled by the existing didFailWithError method, but we can add additional logic here if needed
     }
 }
