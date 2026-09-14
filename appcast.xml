@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andre-simon.de/sparkle-namespace" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Nook</title>
+    <link>https://l984-451.github.io/Nook/appcast.xml</link>
+    <description>Nook update feed</description>
+    <language>en</language>
+  </channel>
+</rss>
