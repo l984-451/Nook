@@ -5,5 +5,17 @@
     <link>https://l984-451.github.io/Nook/appcast.xml</link>
     <description>Nook update feed</description>
     <language>en</language>
-  </channel>
+    <item>
+    <title>Version 1.2.1</title>
+    <sparkle:releaseNotesLink>https://github.com/l984-451/Nook/releases/tag/v1.2.1</sparkle:releaseNotesLink>
+    <pubDate>Mon, 14 Sep 2026 13:54:18 +0000</pubDate>
+    <enclosure
+      url="https://github.com/l984-451/Nook/releases/download/v1.2.1/Nook-v1.2.1.dmg"
+      sparkle:version="121"
+      sparkle:shortVersionString="1.2.1"
+      sparkle:edSignature="XDe0zr0dZzj5wwCfl6Bd9uX141HQTerOa6vGtaRGupRUxbhxHG9dWt18WZwxiHlMVquurTkkHoyRXjzAfry8Cw=="
+      length="29789740"
+      type="application/octet-stream"/>
+  </item>
+</channel>
 </rss>
